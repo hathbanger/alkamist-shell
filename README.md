@@ -1,6 +1,6 @@
 # 🧪 Alkamist CLI Helpers 
 
-A collection of lightweight Bash utilities for working with Bitcoin txids and the [Oyl Alkanes](https://oyl.dev) protocol.
+A collection of lightweight Bash utilities for working with Bitcoin txids and the [Oyl Alkanes](https://alkanes.build) protocol.
 
 Includes tools like:
 
@@ -59,7 +59,7 @@ Calls the `trace` method via `oyl` CLI.
 
 ## 📦 Requirements
 
-* [`oyl`](https://oyl.dev) CLI installed and available on your path
+* [`oyl`](https://github.com/Oyl-Wallet/oyl-sdk) CLI installed and available on your path
 * macOS or Linux with `bash`, `xxd`
 
 ---
