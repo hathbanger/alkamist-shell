@@ -30,7 +30,13 @@ Then reload your shell:
 source ~/.zshrc  # or ~/.bashrc
 ```
 
-### 3. Load Alkamist
+### 3. Export your Sandshrew project ID
+
+```bash
+export SANDSHREW_PROJECT_ID=your_project_id_here
+```
+
+### 4. Load Alkamist
 
 ```bash
 alkamist
