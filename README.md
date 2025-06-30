@@ -1,4 +1,4 @@
-# 🧪 Alkamist CLI
+# 🧪 Alkamist CLI Helpers 
 
 A collection of lightweight Bash utilities for working with Bitcoin txids and the [Oyl Alkanes](https://oyl.dev) protocol.
 
