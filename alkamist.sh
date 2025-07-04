@@ -8,4 +8,5 @@ if [ -z "$SANDSHREW_PROJECT_ID" ]; then
 fi
 
 source "$HOME/.config/alkamist/functions.sh"
-echo "🔮 Alkamist loaded → available commands: decode, trace"
+source "$HOME/.config/alkamist/alias.sh"
+echo "🔮 Alkamist loaded → available commands: decode, gen, trace"
