@@ -26,6 +26,22 @@ decode_le_u64() {
   echo $((16#$little_endian))
 }
 
+encode() {
+  local decimal="$1"
+
+  if [ -z "$decimal" ]; then
+    echo "Error: decimal value required"
+    echo "Usage: encode <number>"
+    return 1
+  fi
+
+  # Convert to hex (trimmed, no padding, big-endian)
+  local hex
+  hex=$(printf "%x" "$decimal")
+
+  echo "0x$hex"
+}
+
 get-alkane() {
   local target="$1"
   local network="${2:-oylnet}"
