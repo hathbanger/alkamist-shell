@@ -42,6 +42,14 @@ encode() {
   echo "0x$hex"
 }
 
+gen() {
+  local count="${1:-1}"  # default to 1 if not provided
+
+  for ((i = 1; i <= count; i++)); do
+    oyl regtest genBlocks -p oylnet
+  done
+}
+
 get-alkane() {
   local target="$1"
   local network="${2:-oylnet}"

@@ -1,1 +1,1 @@
-alias gen="oyl regtest genBlocks -p oylnet"
+alias hello="echo 'Hello, Alkamist!'"
