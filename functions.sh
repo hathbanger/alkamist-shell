@@ -26,7 +26,56 @@ decode_le_u64() {
   echo $((16#$little_endian))
 }
 
-new-token() {
+get-alkane() {
+  local target="$1"
+  local network="${2:-oylnet}"
+
+  if [ -z "$target" ]; then
+    echo "Error: target address is required"
+    echo "Usage: get-alkane <block:tx> [network]"
+    return 1
+  fi
+
+  local get_string() {
+    local opcode="$1"
+    oyl alkane simulate -target "$target" -inputs "$opcode" -p "$network" 2>/dev/null \
+      | jq -r 'select(.status == 0) | .parsed.string // empty'
+  }
+
+  local get_le() {
+    local opcode="$1"
+    oyl alkane simulate -target "$target" -inputs "$opcode" -p "$network" 2>/dev/null \
+      | jq -r 'select(.status == 0) | .parsed.le // empty'
+  }
+
+  local name symbol total_supply cap initialized value_per_mint
+
+  name=$(get_string 99)
+  symbol=$(get_string 100)
+  total_supply=$(get_le 101)
+  cap=$(get_le 102)
+  initialized=$(get_le 103)
+  value_per_mint=$(get_le 104)
+
+  # Format decimal values (if present)
+  if [[ -n "$total_supply" ]]; then
+    total_supply_fmt=$(printf "%.8f" "$(bc -l <<< "$total_supply / 100000000")")
+  fi
+
+  if [[ -n "$value_per_mint" ]]; then
+    value_per_mint_fmt=$(printf "%.8f" "$(bc -l <<< "$value_per_mint / 100000000")")
+  fi
+
+  echo "Alkane at: $target"
+  echo "Name: ${name:-<unset>}"
+  echo "Symbol: ${symbol:-<unset>}"
+  echo "Cap: ${cap:-<unset>}"
+  echo "Total Supply: ${total_supply_fmt:-<unset>}"
+  echo "Value per Mint: ${value_per_mint_fmt:-<unset>}"
+  echo "Initialized: ${initialized:-<unset>}"
+}
+
+new-token-trace() {
   local txid="$1"
 
   if [ -z "$txid" ]; then
@@ -79,7 +128,7 @@ new-token() {
   echo "Value per Mint: $vpm"
 }
 
-new-vault() {
+new-vault-trace() {
   local txid="$1"
 
   if [ -z "$txid" ]; then

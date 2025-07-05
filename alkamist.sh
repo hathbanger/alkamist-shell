@@ -9,4 +9,4 @@ fi
 
 source "$HOME/.config/alkamist/functions.sh"
 source "$HOME/.config/alkamist/alias.sh"
-echo "🔮 Alkamist loaded → available commands: decode, gen, new-token, new-vault, trace"
+echo "🔮 Alkamist loaded → available commands: decode, gen, get-alkane, new-token-trace, new-vault-trace, trace"
