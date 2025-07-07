@@ -2,29 +2,46 @@
 
 decode() {
   local hex="${1}"
+  hex="${hex#0x}"
 
-  if [ -z "$hex" ]; then
-    echo "Error: hex value is required"
+  if [[ -z "$hex" ]]; then
+    echo "<empty>"
     return 1
   fi
 
-  hex="${hex#0x}" # strip leading 0x if present
-
-  # Is it a valid number? Only hex digits and max 16 chars (u64)
   if [[ "$hex" =~ ^[0-9a-fA-F]{1,16}$ ]]; then
     echo $((16#$hex))
     return 0
   fi
 
-  # Try ASCII decoding for longer strings
-  echo -n "$hex" | xxd -r -p
+  echo -n "$hex" | xxd -r -p 2>/dev/null || echo "<decode-failed>"
 }
+
 
 decode_le_u64() {
   local hex="${1#0x}"
-  local little_endian=$(echo "$hex" | head -c 16 | sed 's/../& /g' | awk '{for(i=8;i>=1;i--) printf $i} END {print ""}')
-  echo $((16#$little_endian))
+
+  if [[ -z "$hex" || "$hex" =~ [^0-9a-fA-F] ]]; then
+    echo 0
+    return
+  fi
+
+  # Ensure even length
+  if (( ${#hex} % 2 != 0 )); then
+    hex="0$hex"
+  fi
+
+  local reversed
+  reversed=$(echo "$hex" | sed 's/../& /g' | awk '{for(i=NF;i>=1;i--) printf $i}')
+
+  if [[ -z "$reversed" ]]; then
+    echo 0
+    return
+  fi
+
+  echo $((16#$reversed))
 }
+
 
 encode() {
   local decimal="$1"
@@ -104,46 +121,46 @@ new-token-trace() {
 
   if [ -z "$txid" ]; then
     echo "Error: txid is required"
-    echo "Usage: new-token <txid>"
+    echo "Usage: new-token-trace <txid>"
     return 1
   fi
 
   local trace_output
-  trace_output="$(trace "$txid" 4)"
+  trace_output="$(trace "$txid")"
 
-  if [ -z "$trace_output" ]; then
-    echo "Error: Failed to get trace output"
+  if ! echo "$trace_output" | jq empty >/dev/null 2>&1; then
+    echo "Error: Invalid JSON returned from trace"
+    echo "$trace_output"
     return 1
   fi
 
-  # Extract values
-  local name_hex symbol_hex cap_hex supply_hex vpm_hex
-  local block_hex tx_hex
+  # Extract relevant hex values
+  local name_hex symbol_hex cap_hex supply_hex vpm_hex block_hex tx_hex
+  name_hex=$(echo "$trace_output" | jq -r '.[]? | select(.event == "return").data.response.storage[]? | select(.key == "/name") | .value // ""')
+  symbol_hex=$(echo "$trace_output" | jq -r '.[]? | select(.event == "return").data.response.storage[]? | select(.key == "/symbol") | .value // ""')
+  cap_hex=$(echo "$trace_output" | jq -r '.[]? | select(.event == "return").data.response.storage[]? | select(.key == "/cap") | .value // ""')
+  supply_hex=$(echo "$trace_output" | jq -r '.[]? | select(.event == "return").data.response.storage[]? | select(.key == "/totalsupply") | .value // ""')
+  vpm_hex=$(echo "$trace_output" | jq -r '.[]? | select(.event == "return").data.response.storage[]? | select(.key == "/76616c75652d7065722d6d696e74") | .value // ""')
 
-  name_hex=$(echo "$trace_output" | jq -r '.[] | select(.event == "return").data.response.storage[] | select(.key == "/name") | .value')
-  symbol_hex=$(echo "$trace_output" | jq -r '.[] | select(.event == "return").data.response.storage[] | select(.key == "/symbol") | .value')
-  cap_hex=$(echo "$trace_output" | jq -r '.[] | select(.event == "return").data.response.storage[] | select(.key == "/cap") | .value')
-  supply_hex=$(echo "$trace_output" | jq -r '.[] | select(.event == "return").data.response.storage[] | select(.key == "/totalsupply") | .value')
-  vpm_hex=$(echo "$trace_output" | jq -r '.[] | select(.event == "return").data.response.storage[] | select(.key == "/76616c75652d7065722d6d696e74") | .value')
+  block_hex=$(echo "$trace_output" | jq -r '.[]? | select(.event == "create").data.block // "0x0"')
+  tx_hex=$(echo "$trace_output" | jq -r '.[]? | select(.event == "create").data.tx // "0x0"')
 
-  block_hex=$(echo "$trace_output" | jq -r '.[] | select(.event == "create").data.block')
-  tx_hex=$(echo "$trace_output" | jq -r '.[] | select(.event == "create").data.tx')
+  # Safely decode values
+  local name symbol cap raw_supply raw_vpm supply vpm
+  name=$( [ -n "$name_hex" ] && decode "$name_hex" || echo "<none>" )
+  symbol=$( [ -n "$symbol_hex" ] && decode "$symbol_hex" || echo "<none>" )
+  cap=$( [ -n "$cap_hex" ] && decode_le_u64 "$cap_hex" || echo 0 )
+  raw_supply=$( [ -n "$supply_hex" ] && decode_le_u64 "$supply_hex" || echo 0 )
+  raw_vpm=$( [ -n "$vpm_hex" ] && decode_le_u64 "$vpm_hex" || echo 0 )
 
-  # Decode
-  local name symbol cap supply vpm contract_address
+  # Format decimal values
+  supply=$(printf "%.8f" "$(bc -l <<< "$raw_supply / 100000000")")
+  vpm=$(printf "%.8f" "$(bc -l <<< "$raw_vpm / 100000000")")
 
-  name=$(decode "$name_hex")
-  symbol=$(decode "$symbol_hex")
-  cap=$(decode_le_u64 "$cap_hex")
-  raw_supply=$(decode_le_u64 "$supply_hex")
-  raw_vpm=$(decode_le_u64 "$vpm_hex")
+  # Decode contract address
+  local contract_address="$((16#${block_hex#0x})):$((16#${tx_hex#0x}))"
 
-  supply=$(printf "%.8f" "$(bc -l <<<"$raw_supply / 100000000")")
-  vpm=$(printf "%.8f" "$(bc -l <<<"$raw_vpm / 100000000")")
-
-  contract_address="$((16#${block_hex#0x})):$((16#${tx_hex#0x}))"
-
-  # Print summary
+  # Output
   echo "Contract Address: $contract_address"
   echo "Name: $name"
   echo "Symbol: $symbol"
@@ -189,12 +206,21 @@ trace() {
     return 1
   fi
 
+  if ! command -v jq >/dev/null 2>&1; then
+    echo "Error: jq is required but not installed. Please install jq."
+    return 1
+  fi
+
+  local try_trace_output
   local output
   for vout in {0..6}; do
-    output=$(oyl provider alkanes -method "trace" -params "{\"txid\": \"${txid}\", \"vout\": ${vout}}" -p "$network")
-    if [[ "$output" != "[]" && -n "$output" ]]; then
-      echo "$output"
-      return 0
+    try_trace_output=$(oyl provider alkanes -method "trace" -params "{\"txid\": \"${txid}\", \"vout\": ${vout}}" -p "$network" 2>&1)
+    output=$(echo "$try_trace_output" | awk '/^\[/{flag=1} flag')
+    if echo "$output" | jq empty >/dev/null 2>&1; then
+      if [[ "$output" != "[]" && -n "$output" ]]; then
+        echo "$output" | jq
+        return 0
+      fi
     fi
   done
 
@@ -202,10 +228,13 @@ trace() {
   gen >&2
 
   for vout in {0..6}; do
-    output=$(oyl provider alkanes -method "trace" -params "{\"txid\": \"${txid}\", \"vout\": ${vout}}" -p "$network")
-    if [[ "$output" != "[]" && -n "$output" ]]; then
-      echo "$output"
-      return 0
+    try_trace_output=$(oyl provider alkanes -method "trace" -params "{\"txid\": \"${txid}\", \"vout\": ${vout}}" -p "$network" 2>&1)
+    output=$(echo "$try_trace_output" | awk '/^\[/{flag=1} flag')
+    if echo "$output" | jq empty >/dev/null 2>&1; then
+      if [[ "$output" != "[]" && -n "$output" ]]; then
+        echo "$output" | jq
+        return 0
+      fi
     fi
   done
 
