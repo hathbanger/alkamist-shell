@@ -14,7 +14,29 @@ decode() {
     return 0
   fi
 
-  echo -n "$hex" | xxd -r -p 2>/dev/null || echo "<decode-failed>"
+  # Decode hex to string
+  local decoded
+  decoded=$(echo -n "$hex" | xxd -r -p 2>/dev/null)
+  
+  if [ -z "$decoded" ]; then
+    echo "<decode-failed>"
+    return 1
+  fi
+  
+  # Check if it's a Solidity revert message (starts with 0x08c379a0)
+  if [[ "$hex" =~ ^08c379a0 ]]; then
+    # For Solidity revert messages, extract just the string part
+    # Skip the function selector (4 bytes) and ABI encoding overhead
+    local message_hex="${hex:8}" # Skip function selector
+    local decoded_message
+    decoded_message=$(echo -n "$message_hex" | xxd -r -p 2>/dev/null)
+    
+    # Extract readable part (usually starts after some ABI encoding bytes)
+    echo "$decoded_message" | sed 's/.*ALKANES:/ALKANES:/' | tr -d '\0'
+  else
+    # For other hex strings, clean up control characters
+    echo "$decoded" | tr -d '\0' | LC_ALL=C sed 's/[[:cntrl:]]//g'
+  fi
 }
 
 
@@ -218,7 +240,30 @@ trace() {
     output=$(echo "$try_trace_output" | awk '/^\[/{flag=1} flag')
     if echo "$output" | jq empty >/dev/null 2>&1; then
       if [[ "$output" != "[]" && -n "$output" ]]; then
-        echo "$output" | jq
+        # Check if it's a revert and enhance the output
+        local tx_status
+        tx_status=$(echo "$output" | jq -r '.[] | select(.event == "return").data.status // empty' 2>/dev/null)
+        
+        if [ "$tx_status" = "revert" ]; then
+          echo "🚫 Transaction Reverted"
+          echo ""
+          
+          # Decode the revert reason
+          local revert_data
+          revert_data=$(echo "$output" | jq -r '.[] | select(.event == "return").data.response.data // empty' 2>/dev/null)
+          
+          if [ -n "$revert_data" ]; then
+            local decoded_error
+            decoded_error=$(decode "$revert_data")
+            echo "Error: $decoded_error"
+            echo ""
+          fi
+          
+          echo "Full trace:"
+          echo "$output" | jq
+        else
+          echo "$output" | jq
+        fi
         return 0
       fi
     fi
@@ -232,7 +277,30 @@ trace() {
     output=$(echo "$try_trace_output" | awk '/^\[/{flag=1} flag')
     if echo "$output" | jq empty >/dev/null 2>&1; then
       if [[ "$output" != "[]" && -n "$output" ]]; then
-        echo "$output" | jq
+        # Check if it's a revert and enhance the output
+        local tx_status
+        tx_status=$(echo "$output" | jq -r '.[] | select(.event == "return").data.status // empty' 2>/dev/null)
+        
+        if [ "$tx_status" = "revert" ]; then
+          echo "🚫 Transaction Reverted"
+          echo ""
+          
+          # Decode the revert reason
+          local revert_data
+          revert_data=$(echo "$output" | jq -r '.[] | select(.event == "return").data.response.data // empty' 2>/dev/null)
+          
+          if [ -n "$revert_data" ]; then
+            local decoded_error
+            decoded_error=$(decode "$revert_data")
+            echo "Error: $decoded_error"
+            echo ""
+          fi
+          
+          echo "Full trace:"
+          echo "$output" | jq
+        else
+          echo "$output" | jq
+        fi
         return 0
       fi
     fi
@@ -742,13 +810,145 @@ train() {
     
     if [ -n "$txid" ]; then
       echo "\nTracing transaction $txid..."
-      trace "$txid" "$network"
+      parse_training_trace "$txid" "$network"
     fi
   else
     echo "Transaction failed:"
     echo "$result"
     return 1
   fi
+}
+
+# Parse training trace with battle log formatting
+parse_training_trace() {
+  local txid="$1"
+  local network="${2:-oylnet}"
+  
+  local trace_result
+  trace_result=$(trace "$txid" "$network" 2>/dev/null)
+  
+  if [ -z "$trace_result" ]; then
+    echo "Failed to get trace data"
+    return 1
+  fi
+  
+  # Check if it's a revert
+  local tx_status
+  tx_status=$(echo "$trace_result" | jq -r '.[] | select(.event == "return").data.status // empty' 2>/dev/null)
+  
+  if [ "$tx_status" = "revert" ]; then
+    echo "🚫 Training Failed - Transaction Reverted"
+    echo ""
+    
+    # Decode the revert reason
+    local revert_data
+    revert_data=$(echo "$trace_result" | jq -r '.[] | select(.event == "return").data.response.data // empty' 2>/dev/null)
+    
+    if [ -n "$revert_data" ]; then
+      local decoded_error
+      decoded_error=$(decode "$revert_data")
+      echo "💥 Error: $decoded_error"
+    fi
+    
+    echo ""
+    echo "💡 Common causes:"
+    echo "   - Not enough fuel (try again)"
+    echo "   - Insufficient DUST tokens"
+    echo "   - Invalid opponent type (use 1-18)"
+    echo "   - Alkamon may be fainted (try healing first)"
+    echo ""
+    return 1
+  fi
+  
+  # Parse successful training
+  local battle_data
+  battle_data=$(echo "$trace_result" | jq -r '.[] | select(.event == "return").data.response.data // empty' 2>/dev/null)
+  
+  if [ -z "$battle_data" ]; then
+    echo "No battle data found in trace"
+    return 1
+  fi
+  
+  # Decode the hex data to JSON
+  local json_data
+  json_data=$(echo "${battle_data#0x}" | xxd -r -p 2>/dev/null)
+  
+  if [ -z "$json_data" ]; then
+    echo "Failed to decode battle data"
+    return 1
+  fi
+  
+  # Parse and display battle results
+  echo "⚔️  Training Battle Results"
+  echo "=================================="
+  echo ""
+  
+  # Winner
+  local winner
+  winner=$(echo "$json_data" | jq -r '.winner // "Unknown"')
+  echo "🏆 Winner: $winner"
+  
+  # Battle stats
+  local turns
+  turns=$(echo "$json_data" | jq -r '.total_turns // 0')
+  echo "🔄 Total Turns: $turns"
+  
+  local training_count
+  training_count=$(echo "$json_data" | jq -r '.training_count // 0')
+  echo "📊 Training Count: $training_count"
+  
+  # DUST costs
+  local dust_cost
+  dust_cost=$(echo "$json_data" | jq -r '.dust_cost // 0')
+  echo "💰 DUST Cost: $dust_cost"
+  
+  # HP status
+  local current_hp max_hp
+  current_hp=$(echo "$json_data" | jq -r '.current_hp // 0')
+  max_hp=$(echo "$json_data" | jq -r '.max_hp // 0')
+  echo "❤️  HP After Battle: $current_hp/$max_hp"
+  
+  # Experience gained
+  local exp_gained total_exp
+  exp_gained=$(echo "$json_data" | jq -r '.exp_gained // 0')
+  total_exp=$(echo "$json_data" | jq -r '.total_exp // 0')
+  echo "⭐ EXP Gained: +$exp_gained (Total: $total_exp)"
+  
+  # EV gains
+  local ev_gains
+  ev_gains=$(echo "$json_data" | jq -r '.ev_gains // empty')
+  if [ -n "$ev_gains" ] && [ "$ev_gains" != "null" ]; then
+    echo ""
+    echo "📈 EV Gains:"
+    echo "$ev_gains" | jq -r 'to_entries[] | "  \(.key | ascii_upcase): +\(.value)"'
+  fi
+  
+  # Total EVs
+  local total_evs
+  total_evs=$(echo "$json_data" | jq -r '.total_evs // empty')
+  if [ -n "$total_evs" ] && [ "$total_evs" != "null" ]; then
+    echo ""
+    echo "🔢 Total EVs:"
+    echo "$total_evs" | jq -r 'to_entries[] | select(.key != "total") | "  \(.key | ascii_upcase): \(.value)"'
+    local total_ev_sum
+    total_ev_sum=$(echo "$total_evs" | jq -r '.total // 0')
+    echo "  TOTAL: $total_ev_sum/510"
+  fi
+  
+  # Battle log
+  local battle_log
+  battle_log=$(echo "$json_data" | jq -r '.battle_log // empty')
+  if [ -n "$battle_log" ] && [ "$battle_log" != "null" ]; then
+    echo ""
+    echo "⚔️  Battle Log:"
+    echo "---------------"
+    
+    # Parse each turn
+    echo "$battle_log" | jq -r '.[] | "Turn \(.turn): \(.attacker) used \(.move_used)! \(if .effectiveness != 1.0 then "(\(.effectiveness)x effectiveness) " else "" end)Dealt \(.damage) damage to \(.defender) (HP: \(.defender_hp))"'
+  fi
+  
+  echo ""
+  echo "=================================="
 }
 
 # Main Alkamon display function
