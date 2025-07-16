@@ -77,13 +77,13 @@ get-alkane() {
     return 1
   fi
 
-  local get_string() {
+  get_string() {
     local opcode="$1"
     oyl alkane simulate -target "$target" -inputs "$opcode" -p "$network" 2>/dev/null \
       | jq -r 'select(.status == 0) | .parsed.string // empty'
   }
 
-  local get_le() {
+  get_le() {
     local opcode="$1"
     oyl alkane simulate -target "$target" -inputs "$opcode" -p "$network" 2>/dev/null \
       | jq -r 'select(.status == 0) | .parsed.le // empty'
@@ -241,3 +241,656 @@ trace() {
   echo "Still no result after generating a block." >&2
   return 1
 }
+
+vault-info() {
+  local tx="$1"
+  local network="${2:-oylnet}"
+
+  if [ -z "$tx" ]; then
+    echo "Usage: vault-info <tx> [network]"
+    return 1
+  fi
+
+  if ! command -v jq >/dev/null 2>&1; then
+    echo "❌ jq is required but not installed."
+    return 1
+  fi
+
+  local contract="4:$tx"
+
+  simulate() {
+    oyl alkane simulate -target "$contract" -inputs "$1" -p "$network" 2>/dev/null
+  }
+
+  get_le_u128() {
+    local opcode="$1"
+    local hex
+    hex=$(simulate "$opcode" | jq -r '.parsed.le // empty')
+    echo "${hex:-0}"
+  }
+
+  get_le_u64() {
+    local opcode="$1"
+    local hex
+    hex=$(simulate "$opcode" | jq -r '.parsed.le // empty')
+    echo "${hex:-0}"
+  }
+
+  echo "📦 Vault at: $contract"
+
+  # Fetch values
+  local cap total_staked reward_per_share pending_rewards alloc_point
+  cap=$(get_le_u128 39)
+  total_staked=$(get_le_u128 40)
+  reward_per_share=$(get_le_u128 41)
+  pending_rewards=$(get_le_u128 42)
+  alloc_point=$(get_le_u64 43)
+
+  # Format as readable BTC values
+  local fmt_cap fmt_staked fmt_reward_share fmt_pending
+  fmt_cap=$(printf "%.8f" "$(bc -l <<< "$cap / 100000000")")
+  fmt_staked=$(printf "%.8f" "$(bc -l <<< "$total_staked / 100000000")")
+  fmt_reward_share=$(printf "%.8f" "$(bc -l <<< "$reward_per_share / 100000000")")
+  fmt_pending=$(printf "%.8f" "$(bc -l <<< "$pending_rewards / 100000000")")
+
+  echo "💰 Cap: $fmt_cap"
+  echo "📈 Total Staked: $fmt_staked"
+  echo "🎁 Acc. Reward/Share: $fmt_reward_share"
+  echo "🕑 Pending Reward Balance: $fmt_pending"
+  echo "📊 Allocation Point: $alloc_point"
+
+  # Registered children (opcode 32)
+  local sim_out raw_data
+  sim_out=$(simulate 32)
+  raw_data=$(echo "$sim_out" | jq -r '.parsed.bytes // empty')
+
+  if [ -z "$raw_data" ] || [ "$raw_data" = "null" ]; then
+    echo "🧒 Registered Children: 0"
+    return 0
+  fi
+
+  local hex="${raw_data#0x}"
+  local count_hex="${hex:0:16}"
+  local count_hex_spaced=$(echo "$count_hex" | sed 's/\(..\)/\1 /g')
+  local count_dec=$((16#$(echo "$count_hex_spaced" | awk '{for(i=8;i>=1;i--) printf $i}')))
+
+  echo "🧒 Registered Children: $count_dec"
+
+  if [ "$count_dec" -eq 0 ]; then
+    return 0
+  fi
+
+  local offset=16
+  local i=1
+
+  while [ "$i" -le "$count_dec" ]; do
+    local block_le="${hex:$offset:32}"
+    local tx_le="${hex:$((offset + 32)):32}"
+
+    local block_hex_spaced=$(echo "$block_le" | sed 's/\(..\)/\1 /g')
+    local tx_hex_spaced=$(echo "$tx_le" | sed 's/\(..\)/\1 /g')
+
+    local block_dec=$((16#$(echo "$block_hex_spaced" | awk '{for(j=16;j>=1;j--) printf $j}')))
+    local tx_dec=$((16#$(echo "$tx_hex_spaced" | awk '{for(j=16;j>=1;j--) printf $j}')))
+
+    echo "  - Child $i: $block_dec:$tx_dec"
+
+    offset=$((offset + 64))
+    i=$((i + 1))
+  done
+}
+
+# Alkamon Token Functions
+
+heal() {
+  local token_id="$1"
+  local network="${2:-oylnet}"
+  
+  if [ -z "$token_id" ]; then
+    echo "Usage: heal <token_id> [network]"
+    return 1
+  fi
+  
+  local result
+  result=$(oyl alkane execute -data "2,$token_id,3" -p "$network" 2>&1)
+  
+  # Check if result contains txId (success case)
+  if echo "$result" | grep -q "txId"; then
+    echo "$result"
+    gen
+    
+    # Extract txId for tracing
+    local txid
+    txid=$(echo "$result" | grep "txId:" | sed "s/.*txId: '\([^']*\)'.*/\1/")
+    
+    if [ -n "$txid" ]; then
+      echo "\nTracing transaction $txid..."
+      trace "$txid" "$network"
+    fi
+  else
+    echo "Transaction failed:"
+    echo "$result"
+    return 1
+  fi
+}
+
+candy() {
+  local token_id="$1"
+  local network="${2:-oylnet}"
+  
+  if [ -z "$token_id" ]; then
+    echo "Usage: candy <token_id> [network]"
+    return 1
+  fi
+  
+  local result
+  result=$(oyl alkane execute -data "2,$token_id,4" -p "$network" 2>&1)
+  
+  # Check if result contains txId (success case)
+  if echo "$result" | grep -q "txId"; then
+    echo "$result"
+    gen
+    
+    # Extract txId for tracing
+    local txid
+    txid=$(echo "$result" | grep "txId:" | sed "s/.*txId: '\([^']*\)'.*/\1/")
+    
+    if [ -n "$txid" ]; then
+      echo "\nTracing transaction $txid..."
+      trace "$txid" "$network"
+    fi
+  else
+    echo "Transaction failed:"
+    echo "$result"
+    return 1
+  fi
+}
+
+id() {
+  local token_id="$1"
+  local network="${2:-oylnet}"
+  
+  if [ -z "$token_id" ]; then
+    echo "Usage: id <token_id> [network]"
+    return 1
+  fi
+  
+  # Run the command and extract just the le value
+  oyl alkane simulate -target "2:$token_id" -inputs "10" -p "$network" 2>/dev/null | jq -r '.parsed.le // empty'
+}
+
+level() {
+  local token_id="$1"
+  local network="${2:-oylnet}"
+  
+  if [ -z "$token_id" ]; then
+    echo "Usage: level <token_id> [network]"
+    return 1
+  fi
+  
+  # Run the command and extract just the le value
+  oyl alkane simulate -target "2:$token_id" -inputs "11" -p "$network" 2>/dev/null | jq -r '.parsed.le // empty'
+}
+
+exp() {
+  local token_id="$1"
+  local network="${2:-oylnet}"
+  
+  if [ -z "$token_id" ]; then
+    echo "Usage: exp <token_id> [network]"
+    return 1
+  fi
+  
+  # Run the command and extract just the le value
+  oyl alkane simulate -target "2:$token_id" -inputs "12" -p "$network" 2>/dev/null | jq -r '.parsed.le // empty'
+}
+
+hp() {
+  local token_id="$1"
+  local network="${2:-oylnet}"
+  
+  if [ -z "$token_id" ]; then
+    echo "Usage: hp <token_id> [network]"
+    return 1
+  fi
+  
+  # Run the command and extract just the le value
+  oyl alkane simulate -target "2:$token_id" -inputs "13" -p "$network" 2>/dev/null | jq -r '.parsed.le // empty'
+}
+
+ivs() {
+  local token_id="$1"
+  local network="${2:-oylnet}"
+  
+  if [ -z "$token_id" ]; then
+    echo "Usage: ivs <token_id> [network]"
+    return 1
+  fi
+  
+  local result
+  result=$(oyl alkane simulate -target "2:$token_id" -inputs "14" -p "$network" 2>/dev/null)
+  local raw_data
+  raw_data=$(echo "$result" | jq -r '.execution.data // .parsed.bytes // empty')
+  
+  if [ -z "$raw_data" ] || [ "$raw_data" = "null" ]; then
+    echo "No IVs data found"
+    return 1
+  fi
+  
+  # Decode the hex to JSON
+  local json_data
+  json_data=$(echo "${raw_data#0x}" | xxd -r -p 2>/dev/null)
+  
+  if [ -z "$json_data" ]; then
+    echo "Failed to decode IVs data"
+    return 1
+  fi
+  
+  # Parse JSON and display
+  echo "IVs:"
+  echo "  HP: $(echo "$json_data" | jq -r '.hp // 0')"
+  echo "  Attack: $(echo "$json_data" | jq -r '.attack // 0')"
+  echo "  Defense: $(echo "$json_data" | jq -r '.defense // 0')"
+  echo "  Sp. Attack: $(echo "$json_data" | jq -r '.special_attack // 0')"
+  echo "  Sp. Defense: $(echo "$json_data" | jq -r '.special_defense // 0')"
+  echo "  Speed: $(echo "$json_data" | jq -r '.speed // 0')"
+}
+
+evs() {
+  local token_id="$1"
+  local network="${2:-oylnet}"
+  
+  if [ -z "$token_id" ]; then
+    echo "Usage: evs <token_id> [network]"
+    return 1
+  fi
+  
+  local result
+  result=$(oyl alkane simulate -target "2:$token_id" -inputs "15" -p "$network" 2>/dev/null)
+  local raw_data
+  raw_data=$(echo "$result" | jq -r '.execution.data // .parsed.bytes // empty')
+  
+  if [ -z "$raw_data" ] || [ "$raw_data" = "null" ]; then
+    echo "No EVs data found"
+    return 1
+  fi
+  
+  # Decode the hex to JSON
+  local json_data
+  json_data=$(echo "${raw_data#0x}" | xxd -r -p 2>/dev/null)
+  
+  if [ -z "$json_data" ]; then
+    echo "Failed to decode EVs data"
+    return 1
+  fi
+  
+  # Parse JSON and display
+  echo "EVs:"
+  echo "  HP: $(echo "$json_data" | jq -r '.hp // 0')"
+  echo "  Attack: $(echo "$json_data" | jq -r '.attack // 0')"
+  echo "  Defense: $(echo "$json_data" | jq -r '.defense // 0')"
+  echo "  Sp. Attack: $(echo "$json_data" | jq -r '.special_attack // 0')"
+  echo "  Sp. Defense: $(echo "$json_data" | jq -r '.special_defense // 0')"
+  echo "  Speed: $(echo "$json_data" | jq -r '.speed // 0')"
+}
+
+stats() {
+  local token_id="$1"
+  local network="${2:-oylnet}"
+  
+  if [ -z "$token_id" ]; then
+    echo "Usage: stats <token_id> [network]"
+    return 1
+  fi
+  
+  local result
+  result=$(oyl alkane simulate -target "2:$token_id" -inputs "16" -p "$network" 2>/dev/null)
+  local raw_data
+  raw_data=$(echo "$result" | jq -r '.execution.data // .parsed.bytes // empty')
+  
+  if [ -z "$raw_data" ] || [ "$raw_data" = "null" ]; then
+    echo "No base stats data found"
+    return 1
+  fi
+  
+  # Decode the hex to JSON
+  local json_data
+  json_data=$(echo "${raw_data#0x}" | xxd -r -p 2>/dev/null)
+  
+  if [ -z "$json_data" ]; then
+    echo "Failed to decode base stats data"
+    return 1
+  fi
+  
+  # Parse JSON and display
+  echo "Base Stats:"
+  echo "  HP: $(echo "$json_data" | jq -r '.hp // 0')"
+  echo "  Attack: $(echo "$json_data" | jq -r '.attack // 0')"
+  echo "  Defense: $(echo "$json_data" | jq -r '.defense // 0')"
+  echo "  Sp. Attack: $(echo "$json_data" | jq -r '.special_attack // 0')"
+  echo "  Sp. Defense: $(echo "$json_data" | jq -r '.special_defense // 0')"
+  echo "  Speed: $(echo "$json_data" | jq -r '.speed // 0')"
+}
+
+moves() {
+  local token_id="$1"
+  local network="${2:-oylnet}"
+  
+  if [ -z "$token_id" ]; then
+    echo "Usage: moves <token_id> [network]"
+    return 1
+  fi
+  
+  local result
+  result=$(oyl alkane simulate -target "2:$token_id" -inputs "17" -p "$network" 2>/dev/null)
+  
+  # First try parsed.vec, then decode from hex if needed
+  local moves_array
+  moves_array=$(echo "$result" | jq -r '.parsed.vec // empty' 2>/dev/null)
+  
+  if [ -z "$moves_array" ] || [ "$moves_array" = "null" ] || [ "$moves_array" = "empty" ]; then
+    # Try decoding from hex
+    local raw_data
+    raw_data=$(echo "$result" | jq -r '.execution.data // .parsed.bytes // empty' 2>/dev/null)
+    
+    if [ -n "$raw_data" ] && [ "$raw_data" != "null" ]; then
+      local decoded
+      decoded=$(echo "${raw_data#0x}" | xxd -r -p 2>/dev/null)
+      if [ -n "$decoded" ]; then
+        moves_array="$decoded"
+      fi
+    fi
+  fi
+  
+  if [ -z "$moves_array" ] || [ "$moves_array" = "null" ]; then
+    echo "No moves found"
+    return 1
+  fi
+  
+  # Check if it's JSON array or plain array
+  if echo "$moves_array" | jq -e . >/dev/null 2>&1; then
+    echo "Moves:"
+    echo "$moves_array" | jq -r '.[] | "  - \(.)"'
+  else
+    echo "Moves:"
+    echo "$moves_array"
+  fi
+}
+
+types() {
+  local token_id="$1"
+  local network="${2:-oylnet}"
+  
+  if [ -z "$token_id" ]; then
+    echo "Usage: types <token_id> [network]"
+    return 1
+  fi
+  
+  local result
+  result=$(oyl alkane simulate -target "2:$token_id" -inputs "18" -p "$network" 2>/dev/null)
+  
+  # First try parsed.vec, then decode from hex if needed
+  local types_array
+  types_array=$(echo "$result" | jq -r '.parsed.vec // empty' 2>/dev/null)
+  
+  if [ -z "$types_array" ] || [ "$types_array" = "null" ] || [ "$types_array" = "empty" ]; then
+    # Try decoding from hex
+    local raw_data
+    raw_data=$(echo "$result" | jq -r '.execution.data // .parsed.bytes // empty' 2>/dev/null)
+    
+    if [ -n "$raw_data" ] && [ "$raw_data" != "null" ]; then
+      local decoded
+      decoded=$(echo "${raw_data#0x}" | xxd -r -p 2>/dev/null)
+      if [ -n "$decoded" ]; then
+        types_array="$decoded"
+      fi
+    fi
+  fi
+  
+  if [ -z "$types_array" ] || [ "$types_array" = "null" ]; then
+    echo "No types found"
+    return 1
+  fi
+  
+  # Check if it's JSON array or plain array
+  if echo "$types_array" | jq -e . >/dev/null 2>&1; then
+    echo "Types:"
+    echo "$types_array" | jq -r '.[] | "  - \(.)"'
+  else
+    echo "Types:"
+    echo "$types_array"
+  fi
+}
+
+name() {
+  local token_id="$1"
+  local network="${2:-oylnet}"
+  
+  if [ -z "$token_id" ]; then
+    echo "Usage: name <token_id> [network]"
+    return 1
+  fi
+  
+  local result
+  result=$(oyl alkane simulate -target "2:$token_id" -inputs "99" -p "$network" 2>/dev/null)
+  echo "$result" | jq -r '.parsed.string // empty'
+}
+
+symbol() {
+  local token_id="$1"
+  local network="${2:-oylnet}"
+  
+  if [ -z "$token_id" ]; then
+    echo "Usage: symbol <token_id> [network]"
+    return 1
+  fi
+  
+  local result
+  result=$(oyl alkane simulate -target "2:$token_id" -inputs "100" -p "$network" 2>/dev/null)
+  echo "$result" | jq -r '.parsed.string // empty'
+}
+
+data() {
+  local token_id="$1"
+  local network="${2:-oylnet}"
+  
+  if [ -z "$token_id" ]; then
+    echo "Usage: data <token_id> [network]"
+    return 1
+  fi
+  
+  local result
+  result=$(oyl alkane simulate -target "2:$token_id" -inputs "1000" -p "$network" 2>/dev/null)
+  echo "$result" | jq -r '.parsed.bytes // empty'
+}
+
+attr() {
+  local token_id="$1"
+  local network="${2:-oylnet}"
+  
+  if [ -z "$token_id" ]; then
+    echo "Usage: attr <token_id> [network]"
+    return 1
+  fi
+  
+  local result
+  result=$(oyl alkane simulate -target "2:$token_id" -inputs "1002" -p "$network" 2>/dev/null)
+  echo "$result" | jq -r '.parsed.string // empty'
+}
+
+train() {
+  local token_id="$1"
+  local opponent_type="$2"
+  local network="${3:-oylnet}"
+  
+  if [ -z "$token_id" ] || [ -z "$opponent_type" ]; then
+    echo "Usage: train <token_id> <opponent_type> [network]"
+    return 1
+  fi
+  
+  local result
+  result=$(oyl alkane execute -data "2,$token_id,21,$opponent_type" -p "$network" 2>&1)
+  
+  # Check if result contains txId (success case)
+  if echo "$result" | grep -q "txId"; then
+    echo "$result"
+    gen
+    
+    # Extract txId for tracing
+    local txid
+    txid=$(echo "$result" | grep "txId:" | sed "s/.*txId: '\([^']*\)'.*/\1/")
+    
+    if [ -n "$txid" ]; then
+      echo "\nTracing transaction $txid..."
+      trace "$txid" "$network"
+    fi
+  else
+    echo "Transaction failed:"
+    echo "$result"
+    return 1
+  fi
+}
+
+# Main Alkamon display function
+alkamon() {
+  local token_id="$1"
+  local network="${2:-oylnet}"
+  
+  if [ -z "$token_id" ]; then
+    echo "Usage: alkamon <token_id> [network]"
+    return 1
+  fi
+  
+  # Gather all data
+  local token_name token_symbol token_level token_exp token_hp token_id_val
+  token_name=$(name "$token_id" "$network")
+  token_symbol=$(symbol "$token_id" "$network")
+  token_level=$(level "$token_id" "$network")
+  token_exp=$(exp "$token_id" "$network")
+  token_hp=$(hp "$token_id" "$network")
+  token_id_val=$(id "$token_id" "$network")
+  
+  # Get types and moves
+  local token_types token_moves
+  token_types=$(types "$token_id" "$network" 2>/dev/null)
+  token_moves=$(moves "$token_id" "$network" 2>/dev/null)
+  
+  # Get stats
+  local token_ivs token_evs token_stats
+  token_ivs=$(ivs "$token_id" "$network" 2>/dev/null)
+  token_evs=$(evs "$token_id" "$network" 2>/dev/null)
+  token_stats=$(stats "$token_id" "$network" 2>/dev/null)
+  
+  # Extract individual stats first (we need them for HP calculation and the table)
+  local base_hp=$(echo "$token_stats" | grep -E "^  HP:" | awk '{print $2}')
+  local base_atk=$(echo "$token_stats" | grep -E "^  Attack:" | head -1 | awk '{print $2}')
+  local base_def=$(echo "$token_stats" | grep -E "^  Defense:" | head -1 | awk '{print $2}')
+  local base_spa=$(echo "$token_stats" | grep -E "^  Sp\\. Attack:" | awk '{print $3}')
+  local base_spd=$(echo "$token_stats" | grep -E "^  Sp\\. Defense:" | awk '{print $3}')
+  local base_spe=$(echo "$token_stats" | grep -E "^  Speed:" | awk '{print $2}')
+  
+  local iv_hp=$(echo "$token_ivs" | grep -E "^  HP:" | awk '{print $2}')
+  local iv_atk=$(echo "$token_ivs" | grep -E "^  Attack:" | head -1 | awk '{print $2}')
+  local iv_def=$(echo "$token_ivs" | grep -E "^  Defense:" | head -1 | awk '{print $2}')
+  local iv_spa=$(echo "$token_ivs" | grep -E "^  Sp\\. Attack:" | awk '{print $3}')
+  local iv_spd=$(echo "$token_ivs" | grep -E "^  Sp\\. Defense:" | awk '{print $3}')
+  local iv_spe=$(echo "$token_ivs" | grep -E "^  Speed:" | awk '{print $2}')
+  
+  local ev_hp=$(echo "$token_evs" | grep -E "^  HP:" | awk '{print $2}')
+  local ev_atk=$(echo "$token_evs" | grep -E "^  Attack:" | head -1 | awk '{print $2}')
+  local ev_def=$(echo "$token_evs" | grep -E "^  Defense:" | head -1 | awk '{print $2}')
+  local ev_spa=$(echo "$token_evs" | grep -E "^  Sp\\. Attack:" | awk '{print $3}')
+  local ev_spd=$(echo "$token_evs" | grep -E "^  Sp\\. Defense:" | awk '{print $3}')
+  local ev_spe=$(echo "$token_evs" | grep -E "^  Speed:" | awk '{print $2}')
+  
+  # Calculate max HP using the correct formula from the Rust code
+  # Formula: ((2 * base_hp + iv_hp + (ev_hp / 4)) * level / 100) + level + 10
+  
+  # Calculate max HP
+  local max_hp=$(( ((2 * ${base_hp:-48} + ${iv_hp:-0} + ${ev_hp:-0} / 4) * token_level / 100) + token_level + 10 ))
+  
+  # Display header
+  echo ""
+  echo "╔════════════════════════════════════════════════════════════════╗"
+  echo "║                        ALKAMON DETAILS                         ║"
+  echo "╚════════════════════════════════════════════════════════════════╝"
+  echo ""
+  
+  # Basic info
+  echo "🎮 ${token_name} [${token_symbol}]"
+  echo "📍 Token ID: #${token_id} (Internal: ${token_id_val})"
+  echo ""
+  
+  # Level and experience
+  echo "📊 Level ${token_level}"
+  local exp_bar_length=20
+  local exp_to_next=$((token_level * token_level * 100))
+  local exp_progress=$((token_exp * exp_bar_length / exp_to_next))
+  [ $exp_progress -gt $exp_bar_length ] && exp_progress=$exp_bar_length
+  
+  printf "   EXP: ["
+  for ((i=0; i<exp_bar_length; i++)); do
+    if [ $i -lt $exp_progress ]; then
+      printf "█"
+    else
+      printf "░"
+    fi
+  done
+  printf "] %s\n" "$token_exp"
+  
+  # HP bar
+  echo ""
+  echo "❤️  HP: ${token_hp}/${max_hp}"
+  local hp_bar_length=20
+  local hp_progress=$((token_hp * hp_bar_length / max_hp))
+  [ $hp_progress -gt $hp_bar_length ] && hp_progress=$hp_bar_length
+  
+  printf "   ["
+  for ((i=0; i<hp_bar_length; i++)); do
+    if [ $i -lt $hp_progress ]; then
+      printf "█"
+    else
+      printf "░"
+    fi
+  done
+  printf "]\n"
+  
+  # Types
+  if [ -n "$token_types" ] && [ "$token_types" != "No types found" ]; then
+    echo ""
+    echo "🏷️  Types:"
+    echo "$token_types"
+  fi
+  
+  # Stats display
+  echo ""
+  echo "📈 Battle Stats:"
+  echo "┌─────────────────┬────────┬────────┬────────┐"
+  echo "│ Stat            │  Base  │   IV   │   EV   │"
+  echo "├─────────────────┼────────┼────────┼────────┤"
+  
+  
+  # Parse and display stats in a table
+  if [ -n "$token_stats" ] && [ "$token_stats" != "No base stats data found" ]; then
+    
+    printf "│ %-15s │ %6s │ %6s │ %6s │\n" "HP" "${base_hp:-0}" "${iv_hp:-0}" "${ev_hp:-0}"
+    printf "│ %-15s │ %6s │ %6s │ %6s │\n" "Attack" "${base_atk:-0}" "${iv_atk:-0}" "${ev_atk:-0}"
+    printf "│ %-15s │ %6s │ %6s │ %6s │\n" "Defense" "${base_def:-0}" "${iv_def:-0}" "${ev_def:-0}"
+    printf "│ %-15s │ %6s │ %6s │ %6s │\n" "Sp. Attack" "${base_spa:-0}" "${iv_spa:-0}" "${ev_spa:-0}"
+    printf "│ %-15s │ %6s │ %6s │ %6s │\n" "Sp. Defense" "${base_spd:-0}" "${iv_spd:-0}" "${ev_spd:-0}"
+    printf "│ %-15s │ %6s │ %6s │ %6s │\n" "Speed" "${base_spe:-0}" "${iv_spe:-0}" "${ev_spe:-0}"
+  fi
+  echo "└─────────────────┴────────┴────────┴────────┘"
+  
+  # Moves
+  if [ -n "$token_moves" ] && [ "$token_moves" != "No moves found" ]; then
+    echo ""
+    echo "⚔️  Moves:"
+    echo "$token_moves"
+  fi
+  
+  echo ""
+  echo "═══════════════════════════════════════════════════════════════"
+  echo ""
+}
+

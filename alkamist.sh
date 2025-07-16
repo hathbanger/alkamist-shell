@@ -16,3 +16,4 @@ fi
 source "$HOME/.config/alkamist/functions.sh"
 source "$HOME/.config/alkamist/alias.sh"
 echo "🔮 Alkamist loaded → available commands: decode, encode, gen, get-alkane, new-token-trace, new-vault-trace, trace"
+echo "🎮 Alkamon functions: alkamon (view all), heal, candy, train, id, level, exp, hp, ivs, evs, stats, moves, types, name, symbol"
