@@ -824,10 +824,20 @@ parse_training_trace() {
   local txid="$1"
   local network="${2:-oylnet}"
   
+  # Get raw trace data directly from oyl command
   local trace_result
-  trace_result=$(trace "$txid" "$network" 2>/dev/null)
+  for vout in {0..6}; do
+    local try_trace_output
+    try_trace_output=$(oyl provider alkanes -method "trace" -params "{\"txid\": \"${txid}\", \"vout\": ${vout}}" -p "$network" 2>&1)
+    trace_result=$(echo "$try_trace_output" | awk '/^\[/{flag=1} flag')
+    if echo "$trace_result" | jq empty >/dev/null 2>&1; then
+      if [[ "$trace_result" != "[]" && -n "$trace_result" ]]; then
+        break
+      fi
+    fi
+  done
   
-  if [ -z "$trace_result" ]; then
+  if [ -z "$trace_result" ] || [ "$trace_result" = "[]" ]; then
     echo "Failed to get trace data"
     return 1
   fi
