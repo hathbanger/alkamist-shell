@@ -13,13 +13,33 @@ Includes tools like:
 
 ## 🛠️ Installation
 
-### 1. Clone the repo
+### 1. Install the Oyl SDK
+
+First, install the Oyl SDK which provides the `oyl` CLI:
+
+```bash
+# Using npm (recommended)
+npm install -g @oyl/sdk
+
+# Or using yarn
+yarn global add @oyl/sdk
+
+# Or using pnpm
+pnpm add -g @oyl/sdk
+```
+
+Verify the installation:
+```bash
+oyl --version
+```
+
+### 2. Clone this repo
 
 ```bash
 git clone https://github.com/yourusername/alkamist.git ~/.config/alkamist
 ````
 
-### 2. Add to your shell
+### 3. Add to your shell
 
 Append the following to your `~/.zshrc` or `~/.bashrc`:
 
@@ -34,13 +54,21 @@ Then reload your shell:
 source ~/.zshrc  # or ~/.bashrc
 ```
 
-### 3. Export your Sandshrew project ID
+### 4. Configure environment variables
 
+#### Required for all operations:
 ```bash
 export SANDSHREW_PROJECT_ID=your_project_id_here
 ```
 
-### 4. Load Alkamist
+#### Required for write operations (heal, candy, train):
+```bash
+export MNEMONIC="your twelve word mnemonic phrase here"
+```
+
+**⚠️ Security Note**: Keep your mnemonic secure and never share it. Consider adding these to your shell profile (`.zshrc`/`.bashrc`) for convenience.
+
+### 5. Load Alkamist
 
 ```bash
 alkamist
@@ -115,6 +143,8 @@ Displays detailed information about a vault.
 - `candy <token_id>` — Use rare candy to level up
 - `train <token_id> <opponent_type>` — Train against opponent (1-18)
 
+**⚠️ Note**: Write functions require your `MNEMONIC` environment variable to be set.
+
 All write functions automatically:
 - Execute the transaction
 - Generate a new block
@@ -123,6 +153,10 @@ All write functions automatically:
 ### 📊 Example Usage
 
 ```bash
+# First-time setup
+export SANDSHREW_PROJECT_ID=your_project_id_here
+export MNEMONIC="your twelve word mnemonic phrase here"
+
 # Load alkamist
 alkamist
 
@@ -134,13 +168,13 @@ level 60
 hp 60
 ivs 60
 
-# Train your Alkamon
+# Train your Alkamon (requires MNEMONIC)
 train 60 1  # Train against Fire type (1)
 
-# Heal after training
+# Heal after training (requires MNEMONIC)
 heal 60
 
-# Use rare candy to level up
+# Use rare candy to level up (requires MNEMONIC)
 candy 60
 ```
 
@@ -148,10 +182,12 @@ candy 60
 
 ## 📦 Requirements
 
-* [`oyl`](https://github.com/Oyl-Wallet/oyl-sdk) CLI installed and available on your path
-* `jq` for JSON parsing (`brew install jq` or `apt install jq`)
-* macOS or Linux with `bash`, `xxd`
-* A Sandshrew project ID for accessing the Oyl network
+* **Node.js** (for installing the Oyl SDK)
+* **[Oyl SDK](https://github.com/Oyl-Wallet/oyl-sdk)** (`npm install -g @oyl/sdk`)
+* **jq** for JSON parsing (`brew install jq` or `apt install jq`)
+* **macOS or Linux** with `bash`, `xxd`
+* **Sandshrew project ID** for accessing the Oyl network
+* **Mnemonic phrase** for write operations (heal, candy, train)
 
 ---
 
