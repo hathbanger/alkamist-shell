@@ -990,7 +990,7 @@ simulate() {
   .parsed.string | fromjson | 
   
   # Create the battle summary
-  "\n🎮 BATTLE SUMMARY\n" +
+  "\n🎮 SIMULATE BATTLE SUMMARY\n" +
   "================\n" +
   "Winner: \(.winner)\n" +
   "Total Turns: \(.total_turns)\n" +
@@ -1155,5 +1155,28 @@ alkamon() {
   echo ""
   echo "═══════════════════════════════════════════════════════════════"
   echo ""
+}
+
+# Continuous alkamon monitoring
+alkamon-check() {
+  local token_id="$1"
+  local network="${2:-oylnet}"
+  
+  if [ -z "$token_id" ]; then
+    echo "Usage: alkamon-check <token_id> [network]"
+    return 1
+  fi
+  
+  echo "Monitoring Alkamon #$token_id (Press Ctrl+C to stop)..."
+  echo "================================================"
+  
+  while true; do
+    alkamon "$token_id" "$network"
+    echo ""
+    echo "Refreshing in 2 seconds..."
+    sleep 2
+    echo ""
+    echo "================================================"
+  done
 }
 
