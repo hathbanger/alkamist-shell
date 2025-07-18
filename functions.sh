@@ -961,6 +961,59 @@ parse_training_trace() {
   echo "=================================="
 }
 
+# Simulate battle function
+simulate() {
+  local alkamon_id="$1"
+  local opponent_level="$2"
+  local network="${3:-oylnet}"
+  
+  if [ -z "$alkamon_id" ] || [ -z "$opponent_level" ]; then
+    echo "Usage: simulate <alkamon_id> <opponent_level> [network]"
+    return 1
+  fi
+  
+  # Run the simulation and parse with jq
+  oyl alkane simulate -target "2:$alkamon_id" -inputs "21,$opponent_level" -p "$network" | jq -r '
+  # Get gas used and battle data
+  . as $root |
+  
+  # Format gas with color if over 3.5M
+  ($root.gasUsed | 
+    if . > 3500000 then 
+      "\u001b[31m\(.)\u001b[0m"  # Red color
+    else 
+      "\(.)" 
+    end
+  ) as $gas_display |
+  
+  # Extract the parsed battle data
+  .parsed.string | fromjson | 
+  
+  # Create the battle summary
+  "\n🎮 BATTLE SUMMARY\n" +
+  "================\n" +
+  "Winner: \(.winner)\n" +
+  "Total Turns: \(.total_turns)\n" +
+  "Gas Used: " + $gas_display + "\n" +
+  "\n💰 REWARDS\n" +
+  "=========\n" +
+  "Experience Gained: \(.exp_gained)\n" +
+  "Total Experience: \(.total_exp)\n" +
+  "Dust Cost: \(.dust_cost)\n" +
+  "\n📊 STATS\n" +
+  "========\n" +
+  "Current HP: \(.current_hp)/\(.max_hp)\n" +
+  "EV Gains: " + (if .ev_gains | length > 0 then (.ev_gains | to_entries | map("\(.key): +\(.value)") | join(", ")) else "None" end) + "\n" +
+  "Total EVs: Speed=\(.total_evs.speed) (Total: \(.total_evs.total))\n" +
+  "\n⚔️  BATTLE LOG\n" +
+  "============\n" +
+  (.battle_log | map(
+    "Turn \(.turn): \(.message)\n" +
+    "  \(.defender): \(.defender_hp) HP (−\(.damage) damage)\n"
+  ) | join("\n"))
+  '
+}
+
 # Main Alkamon display function
 alkamon() {
   local token_id="$1"
