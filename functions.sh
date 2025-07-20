@@ -961,6 +961,127 @@ parse_training_trace() {
   echo "=================================="
 }
 
+# Initialize function
+init() {
+  local factory_id="$1"
+  local alkamon_factory_id="$2"
+  local network="${3:-oylnet}"
+  
+  if [ -z "$factory_id" ] || [ -z "$alkamon_factory_id" ]; then
+    echo "Usage: init <factory_id> <alkamon_factory_id> [network]"
+    return 1
+  fi
+  
+  local result
+  result=$(oyl alkane execute -data "4,$factory_id,0,2,12253,2,12253,0,0,$alkamon_factory_id" -p "$network" 2>&1)
+  
+  # Check if result contains txId (success case)
+  if echo "$result" | grep -q "txId"; then
+    echo "$result"
+    gen
+    
+    # Extract txId for tracing
+    local txid
+    txid=$(echo "$result" | grep "txId:" | sed "s/.*txId: '\([^']*\)'.*/\1/")
+    
+    if [ -n "$txid" ]; then
+      echo ""
+      echo "Tracing init transaction $txid..."
+      trace "$txid" "$network"
+    fi
+  else
+    echo "Init failed:"
+    echo "$result"
+    return 1
+  fi
+}
+
+# Summon function
+summon() {
+  local summon_type="$1"
+  local network="${2:-oylnet}"
+  
+  if [ -z "$summon_type" ]; then
+    echo "Usage: summon <type> [network]"
+    return 1
+  fi
+  
+  local result
+  result=$(oyl alkane execute -data "4,$summon_type,1" -p "$network" 2>&1)
+  
+  # Check if result contains txId (success case)
+  if echo "$result" | grep -q "txId"; then
+    echo "$result"
+    gen
+    
+    # Extract txId for tracing
+    local txid
+    txid=$(echo "$result" | grep "txId:" | sed "s/.*txId: '\([^']*\)'.*/\1/")
+    
+    if [ -n "$txid" ]; then
+      echo ""
+      echo "Tracing summon transaction $txid..."
+      
+      # Get trace data and parse it
+      local trace_output
+      for vout in {0..6}; do
+        local try_trace_output
+        try_trace_output=$(oyl provider alkanes -method "trace" -params "{\"txid\": \"${txid}\", \"vout\": ${vout}}" -p "$network" 2>&1)
+        trace_output=$(echo "$try_trace_output" | awk '/^\[/{flag=1} flag')
+        if echo "$trace_output" | jq empty >/dev/null 2>&1; then
+          if [[ "$trace_output" != "[]" && -n "$trace_output" ]]; then
+            break
+          fi
+        fi
+      done
+      
+      if [ -n "$trace_output" ] && [ "$trace_output" != "[]" ]; then
+        # Parse the summon results
+        local alkamon_tx alkamon_name alkamon_symbol
+        
+        # Get the created alkamon's tx ID (convert from hex)
+        alkamon_tx=$(echo "$trace_output" | jq -r '.[] | select(.event == "create").data.tx // empty' | head -1)
+        if [ -n "$alkamon_tx" ]; then
+          alkamon_tx=$((16#${alkamon_tx#0x}))
+        fi
+        
+        # Get name and symbol from storage
+        local name_hex symbol_hex
+        name_hex=$(echo "$trace_output" | jq -r '.[] | select(.event == "return").data.response.storage[] | select(.key == "/name").value // empty' | head -1)
+        symbol_hex=$(echo "$trace_output" | jq -r '.[] | select(.event == "return").data.response.storage[] | select(.key == "/symbol").value // empty' | head -1)
+        
+        if [ -n "$name_hex" ]; then
+          alkamon_name=$(decode "$name_hex")
+        fi
+        
+        if [ -n "$symbol_hex" ]; then
+          alkamon_symbol=$(decode "$symbol_hex")
+        fi
+        
+        # Display results
+        echo ""
+        echo "✨ SUMMON SUCCESSFUL!"
+        echo "===================="
+        echo "🎮 Alkamon: $alkamon_name [$alkamon_symbol]"
+        echo "📍 Token ID: #$alkamon_tx"
+        echo ""
+        echo "You can now use commands like:"
+        echo "  alkamon $alkamon_tx"
+        echo "  train $alkamon_tx 1"
+        echo "  heal $alkamon_tx"
+        echo ""
+      else
+        echo "Failed to parse summon trace"
+        return 1
+      fi
+    fi
+  else
+    echo "Summon failed:"
+    echo "$result"
+    return 1
+  fi
+}
+
 # Simulate battle function
 simulate() {
   local alkamon_id="$1"
