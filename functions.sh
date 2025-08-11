@@ -235,19 +235,32 @@ trace() {
 
   local try_trace_output
   local output
-  for vout in {0..6}; do
+  local all_traces=""
+  local trace_count=0
+  
+  # Try outputs 0-9
+  for vout in {0..9}; do
     try_trace_output=$(oyl provider alkanes -method "trace" -params "{\"txid\": \"${txid}\", \"vout\": ${vout}}" -p "$network" 2>&1)
     output=$(echo "$try_trace_output" | awk '/^\[/{flag=1} flag')
     if echo "$output" | jq empty >/dev/null 2>&1; then
       if [[ "$output" != "[]" && -n "$output" ]]; then
+        if [ $trace_count -gt 0 ]; then
+          # Multiple traces - add separator
+          all_traces="${all_traces}
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+📍 Output #$vout:
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+"
+        fi
+        
         # Check if it's a revert and enhance the output
         local tx_status
         tx_status=$(echo "$output" | jq -r '.[] | select(.event == "return").data.status // empty' 2>/dev/null)
         
         if [ "$tx_status" = "revert" ]; then
-          echo "🚫 Transaction Reverted"
-          echo ""
-          
+          all_traces="${all_traces}🚫 Transaction Reverted${trace_count:+ (vout: $vout)}
+
+"
           # Decode the revert reason
           local revert_data
           revert_data=$(echo "$output" | jq -r '.[] | select(.event == "return").data.response.data // empty' 2>/dev/null)
@@ -255,36 +268,60 @@ trace() {
           if [ -n "$revert_data" ]; then
             local decoded_error
             decoded_error=$(decode "$revert_data")
-            echo "Error: $decoded_error"
-            echo ""
+            all_traces="${all_traces}Error: $decoded_error
+
+"
           fi
           
-          echo "Full trace:"
-          echo "$output" | jq
+          all_traces="${all_traces}Full trace:
+$(echo "$output" | jq)"
         else
-          echo "$output" | jq
+          all_traces="${all_traces}$(echo "$output" | jq)"
         fi
-        return 0
+        
+        trace_count=$((trace_count + 1))
       fi
     fi
   done
 
-  echo "No results from vout 0–6. Generating a block and retrying..." >&2
+  if [ $trace_count -gt 0 ]; then
+    if [ $trace_count -gt 1 ]; then
+      echo "📋 Found $trace_count traces for transaction $txid"
+      echo ""
+    fi
+    echo "$all_traces"
+    return 0
+  fi
+
+  # No traces found, generate a block and retry
+  echo "No results from vout 0–9. Generating a block and retrying..." >&2
   gen >&2
 
-  for vout in {0..6}; do
+  all_traces=""
+  trace_count=0
+  
+  for vout in {0..9}; do
     try_trace_output=$(oyl provider alkanes -method "trace" -params "{\"txid\": \"${txid}\", \"vout\": ${vout}}" -p "$network" 2>&1)
     output=$(echo "$try_trace_output" | awk '/^\[/{flag=1} flag')
     if echo "$output" | jq empty >/dev/null 2>&1; then
       if [[ "$output" != "[]" && -n "$output" ]]; then
+        if [ $trace_count -gt 0 ]; then
+          # Multiple traces - add separator
+          all_traces="${all_traces}
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+📍 Output #$vout:
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+"
+        fi
+        
         # Check if it's a revert and enhance the output
         local tx_status
         tx_status=$(echo "$output" | jq -r '.[] | select(.event == "return").data.status // empty' 2>/dev/null)
         
         if [ "$tx_status" = "revert" ]; then
-          echo "🚫 Transaction Reverted"
-          echo ""
-          
+          all_traces="${all_traces}🚫 Transaction Reverted${trace_count:+ (vout: $vout)}
+
+"
           # Decode the revert reason
           local revert_data
           revert_data=$(echo "$output" | jq -r '.[] | select(.event == "return").data.response.data // empty' 2>/dev/null)
@@ -292,19 +329,30 @@ trace() {
           if [ -n "$revert_data" ]; then
             local decoded_error
             decoded_error=$(decode "$revert_data")
-            echo "Error: $decoded_error"
-            echo ""
+            all_traces="${all_traces}Error: $decoded_error
+
+"
           fi
           
-          echo "Full trace:"
-          echo "$output" | jq
+          all_traces="${all_traces}Full trace:
+$(echo "$output" | jq)"
         else
-          echo "$output" | jq
+          all_traces="${all_traces}$(echo "$output" | jq)"
         fi
-        return 0
+        
+        trace_count=$((trace_count + 1))
       fi
     fi
   done
+
+  if [ $trace_count -gt 0 ]; then
+    if [ $trace_count -gt 1 ]; then
+      echo "📋 Found $trace_count traces for transaction $txid"
+      echo ""
+    fi
+    echo "$all_traces"
+    return 0
+  fi
 
   echo "Still no result after generating a block." >&2
   return 1
@@ -1299,5 +1347,256 @@ alkamon-check() {
     echo ""
     echo "================================================"
   done
+}
+
+# P2P Battle function
+p2p() {
+  local contract_id="$1"
+  local player1_id="$2"
+  local player2_id="$3"
+  local network="${4:-oylnet}"
+  
+  if [ -z "$contract_id" ] || [ -z "$player1_id" ] || [ -z "$player2_id" ]; then
+    echo "Usage: p2p <contract_id> <player1_token_id> <player2_token_id> [network]"
+    echo "Example: p2p 11438 0 1"
+    return 1
+  fi
+  
+  echo "⚔️  Initiating P2P Battle..."
+  echo "Contract: #$contract_id"
+  echo "Player 1: Token #$player1_id"
+  echo "Player 2: Token #$player2_id"
+  echo ""
+  
+  # Execute the battle transaction
+  local result
+  result=$(oyl alkane execute -data "4,$contract_id,$player1_id,$player2_id,1,2,2" -p "$network" 2>&1)
+  
+  if echo "$result" | grep -q "txId"; then
+    echo "$result"
+    gen
+    
+    # Extract txId for tracing
+    local txid
+    txid=$(echo "$result" | grep "txId:" | sed "s/.*txId: '\([^']*\)'.*/\1/")
+    
+    if [ -n "$txid" ]; then
+      echo ""
+      echo "Tracing battle transaction $txid..."
+      parse_p2p_trace "$txid" "$network"
+    fi
+  else
+    echo "Battle failed:"
+    echo "$result"
+    return 1
+  fi
+}
+
+# Parse P2P battle trace
+parse_p2p_trace() {
+  local txid="$1"
+  local network="${2:-oylnet}"
+  
+  # Get raw trace data
+  local trace_result
+  for vout in {0..6}; do
+    local try_trace_output
+    try_trace_output=$(oyl provider alkanes -method "trace" -params "{\"txid\": \"${txid}\", \"vout\": ${vout}}" -p "$network" 2>&1)
+    trace_result=$(echo "$try_trace_output" | awk '/^\[/{flag=1} flag')
+    if echo "$trace_result" | jq empty >/dev/null 2>&1; then
+      if [[ "$trace_result" != "[]" && -n "$trace_result" ]]; then
+        break
+      fi
+    fi
+  done
+  
+  if [ -z "$trace_result" ] || [ "$trace_result" = "[]" ]; then
+    echo "Failed to get trace data"
+    return 1
+  fi
+  
+  # Check if it's a revert
+  local tx_status
+  tx_status=$(echo "$trace_result" | jq -r '.[] | select(.event == "return").data.status // empty' 2>/dev/null | tail -1)
+  
+  if [ "$tx_status" = "revert" ]; then
+    echo "🚫 Battle Failed - Transaction Reverted"
+    echo ""
+    
+    local revert_data
+    revert_data=$(echo "$trace_result" | jq -r '.[] | select(.event == "return" and .data.status == "revert").data.response.data // empty' 2>/dev/null | tail -1)
+    
+    if [ -n "$revert_data" ]; then
+      local decoded_error
+      decoded_error=$(decode "$revert_data")
+      echo "💥 Error: $decoded_error"
+    fi
+    
+    echo ""
+    return 1
+  fi
+  
+  # Get the final battle result from the main contract
+  local battle_data
+  battle_data=$(echo "$trace_result" | jq -r '.[] | select(.event == "return" and .data.status == "success").data.response.data // empty' 2>/dev/null | tail -1)
+  
+  if [ -z "$battle_data" ] || [ "$battle_data" = "0x" ]; then
+    echo "No battle data found"
+    return 1
+  fi
+  
+  # Decode the battle result
+  local json_data
+  json_data=$(echo "${battle_data#0x}" | xxd -r -p 2>/dev/null)
+  
+  if [ -z "$json_data" ]; then
+    echo "Failed to decode battle data"
+    return 1
+  fi
+  
+  # Parse and display battle results
+  echo ""
+  echo "⚔️  P2P BATTLE RESULTS"
+  echo "═══════════════════════════════════════════"
+  echo ""
+  
+  # Battle ID
+  local battle_id
+  battle_id=$(echo "$json_data" | jq -r '.battle_id // 0')
+  echo "🆔 Battle ID: #$battle_id"
+  
+  # Winner
+  local winner
+  winner=$(echo "$json_data" | jq -r '.winner // 0')
+  if [ "$winner" = "0" ]; then
+    echo "🏆 Winner: Player 1"
+  elif [ "$winner" = "1" ]; then
+    echo "🏆 Winner: Player 2"
+  else
+    echo "🏆 Winner: Draw"
+  fi
+  
+  # Total turns
+  local turns
+  turns=$(echo "$json_data" | jq -r '.total_turns // 0')
+  echo "🔄 Total Turns: $turns"
+  echo ""
+  
+  # Player 1 stats
+  echo "👤 Player 1 (Token #$(echo "$json_data" | jq -r '.player1.token_id // 0')):"
+  echo "   Final HP: $(echo "$json_data" | jq -r '.player1.final_hp // 0')"
+  echo "   EXP Gained: +$(echo "$json_data" | jq -r '.player1.exp_gained // 0')"
+  
+  local p1_evs
+  p1_evs=$(echo "$json_data" | jq -r '.player1.ev_gains // empty')
+  if [ -n "$p1_evs" ] && [ "$p1_evs" != "null" ]; then
+    echo "   EV Gains:"
+    echo "$p1_evs" | jq -r 'to_entries[] | select(.value > 0) | "     \(.key | ascii_upcase): +\(.value)"'
+  fi
+  echo ""
+  
+  # Player 2 stats
+  echo "👤 Player 2 (Token #$(echo "$json_data" | jq -r '.player2.token_id // 0')):"
+  echo "   Final HP: $(echo "$json_data" | jq -r '.player2.final_hp // 0')"
+  echo "   EXP Gained: +$(echo "$json_data" | jq -r '.player2.exp_gained // 0')"
+  
+  local p2_evs
+  p2_evs=$(echo "$json_data" | jq -r '.player2.ev_gains // empty')
+  if [ -n "$p2_evs" ] && [ "$p2_evs" != "null" ]; then
+    echo "   EV Gains:"
+    echo "$p2_evs" | jq -r 'to_entries[] | select(.value > 0) | "     \(.key | ascii_upcase): +\(.value)"'
+  fi
+  
+  # Battle log (if available)
+  local battle_log
+  battle_log=$(echo "$json_data" | jq -r '.battle_log // empty')
+  if [ -n "$battle_log" ] && [ "$battle_log" != "null" ] && [ "$battle_log" != "[]" ]; then
+    echo ""
+    echo "⚔️  Battle Log:"
+    echo "─────────────────────────────────────────"
+    
+    # Parse each turn from the battle log
+    echo "$battle_log" | jq -r '.[] | 
+      if .type == "move" then
+        "Turn \(.turn): \(.attacker) used \(.move)! \(if .effectiveness != 1.0 then "(\(.effectiveness)x) " else "" end)Dealt \(.damage) damage."
+      elif .type == "faint" then
+        "       💀 \(.pokemon) fainted!"
+      else
+        "       \(.message // .)"
+      end'
+  fi
+  
+  echo ""
+  echo "═══════════════════════════════════════════"
+  echo ""
+  
+  # Get updated stats for both players using the token IDs passed to the function
+  echo "📊 Post-Battle Status:"
+  echo "Player 1: $(name "$player1_id" "$network") - HP: $(hp "$player1_id" "$network")"
+  echo "Player 2: $(name "$player2_id" "$network") - HP: $(hp "$player2_id" "$network")"
+}
+
+# Execute function
+execute() {
+  local args="$1"
+  shift
+  
+  local network="oylnet"
+  local fee_rate="2"
+  
+  # Parse remaining arguments
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --feeRate|--fee-rate|-f)
+        if [ -n "$2" ]; then
+          fee_rate="$2"
+          shift 2
+        else
+          echo "Error: --feeRate requires a value"
+          return 1
+        fi
+        ;;
+      --network|-p)
+        if [ -n "$2" ]; then
+          network="$2"
+          shift 2
+        else
+          echo "Error: --network requires a value"
+          return 1
+        fi
+        ;;
+      *)
+        # If it doesn't start with --, assume it's the network for backwards compatibility
+        if [[ ! "$1" =~ ^-- ]]; then
+          network="$1"
+        else
+          echo "Error: Unknown option $1"
+          return 1
+        fi
+        shift
+        ;;
+    esac
+  done
+  
+  if [ -z "$args" ]; then
+    echo "Usage: execute <args> [network] [--feeRate <rate>]"
+    echo "Examples:"
+    echo "  execute 12995"
+    echo "  execute 12995 oylnet"
+    echo "  execute 12995 --feeRate 10"
+    echo "  execute 12995 oylnet --feeRate 10"
+    echo "  execute 12995 --network oylnet --feeRate 10"
+    echo "  execute 12995,0,2,12470,2,12470,0,0,13336,4,13527,4,13695,4,13795,4,13895"
+    return 1
+  fi
+  
+  # Check if args contains a comma
+  if [[ "$args" == *","* ]]; then
+    # Multiple arguments - use as-is
+    oyl alkane execute -data "4,$args" -p "$network" --feeRate "$fee_rate" && gen
+  else
+    # Single number - use contract reserve format
+    oyl alkane execute -data "4,$args,0" -p "$network" --feeRate "$fee_rate" && gen
+  fi
 }
 
