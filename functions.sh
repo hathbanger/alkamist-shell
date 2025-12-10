@@ -1,5 +1,56 @@
 # ~/.config/alkamist/functions.sh
 
+# Alkanes-CLI configuration
+ALKANES_CLI_BIN="${ALKANES_CLI_BIN:-/Users/andrewhathaway/code/oyl/alkanes-rs/target/release/alkanes-cli}"
+ALKANES_WALLET="${ALKANES_WALLET_FILE:-$HOME/.alkanes/wallet.json}"
+ALKANES_PASS="${ALKANES_PASSWORD:-amh05055}"
+ALKANES_RPC="${ALKANES_JSONRPC_URL:-https://regtest.subfrost.io/v4/cd5e637ee36b786f9e496d51b7060a01}"
+ALKANES_DATA="${ALKANES_DATA_API:-https://regtest.subfrost.io/v4/cd5e637ee36b786f9e496d51b7060a01}"
+
+# Helper to map network names: oylnet -> regtest for alkanes-cli
+map_network() {
+  case "$1" in
+    oylnet) echo "regtest";;
+    *) echo "$1";;
+  esac
+}
+
+# Helper to build alkanes-cli base command with all required flags
+alkanes_cli() {
+  local network="${1:-regtest}"
+  local mapped_network=$(map_network "$network")
+  echo "\"$ALKANES_CLI_BIN\" -p $mapped_network --wallet-file \"$ALKANES_WALLET\" --passphrase \"$ALKANES_PASS\" --jsonrpc-url \"$ALKANES_RPC\" --data-api \"$ALKANES_DATA\""
+}
+
+# Helper to ensure value is hex-encoded
+# If already hex (0x prefix), return as-is
+# If decimal number, convert to hex
+# If hex string (a-f chars), add 0x prefix
+ensure_hex() {
+  local value="$1"
+
+  # Already has 0x prefix - return as-is
+  if [[ "$value" =~ ^0x[0-9a-fA-F]+$ ]]; then
+    echo "$value"
+    return
+  fi
+
+  # Plain decimal number (no a-f chars) - convert to hex
+  if [[ "$value" =~ ^[0-9]+$ ]]; then
+    printf "0x%x" "$value"
+    return
+  fi
+
+  # Hex string with a-f chars (but no 0x prefix) - add prefix
+  if [[ "$value" =~ ^[0-9a-fA-F]+$ ]] && [[ "$value" =~ [a-fA-F] ]]; then
+    echo "0x$value"
+    return
+  fi
+
+  # String - convert to hex bytes
+  echo -n "$value" | xxd -p | sed 's/^/0x/'
+}
+
 decode() {
   local hex="${1}"
   hex="${hex#0x}"
@@ -81,15 +132,23 @@ encode() {
 
 gen() {
   local count="${1:-1}" # default to 1 if not provided
+  local network="${2:-oylnet}"
+  local mapped_network=$(map_network "$network")
 
   for ((i = 1; i <= count; i++)); do
-    oyl regtest genBlocks -p oylnet
+    "$ALKANES_CLI_BIN" -p "$mapped_network" \
+      --wallet-file "$ALKANES_WALLET" \
+      --passphrase "$ALKANES_PASS" \
+      --jsonrpc-url "$ALKANES_RPC" \
+      --data-api "$ALKANES_DATA" \
+      bitcoind generatetoaddress 1 "p2tr:0" > /dev/null 2>&1
   done
 }
 
 get-alkane() {
   local target="$1"
   local network="${2:-oylnet}"
+  local mapped_network=$(map_network "$network")
 
   if [ -z "$target" ]; then
     echo "Error: target address is required"
@@ -99,13 +158,23 @@ get-alkane() {
 
   get_string() {
     local opcode="$1"
-    oyl alkane simulate -target "$target" -inputs "$opcode" -p "$network" 2>/dev/null |
+    "$ALKANES_CLI_BIN" -p "$mapped_network" \
+      --wallet-file "$ALKANES_WALLET" \
+      --passphrase "$ALKANES_PASS" \
+      --jsonrpc-url "$ALKANES_RPC" \
+      --data-api "$ALKANES_DATA" \
+      alkanes simulate "$target" --calldata "[$opcode]:v0:v0" 2>/dev/null |
       jq -r 'select(.status == 0) | .parsed.string // empty'
   }
 
   get_le() {
     local opcode="$1"
-    oyl alkane simulate -target "$target" -inputs "$opcode" -p "$network" 2>/dev/null |
+    "$ALKANES_CLI_BIN" -p "$mapped_network" \
+      --wallet-file "$ALKANES_WALLET" \
+      --passphrase "$ALKANES_PASS" \
+      --jsonrpc-url "$ALKANES_RPC" \
+      --data-api "$ALKANES_DATA" \
+      alkanes simulate "$target" --calldata "[$opcode]:v0:v0" 2>/dev/null |
       jq -r 'select(.status == 0) | .parsed.le // empty'
   }
 
@@ -238,8 +307,10 @@ trace() {
 
   # Try outputs 0-9
   for vout in {0..9}; do
-    try_trace_output=$(oyl provider alkanes -method "trace" -params "{\"txid\": \"${txid}\", \"vout\": ${vout}}" -p "$network" 2>&1)
-    output=$(echo "$try_trace_output" | awk '/^\[/{flag=1} flag')
+    try_trace_output=$(curl -s -X POST "$ALKANES_RPC" \
+      -H "Content-Type: application/json" \
+      -d "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"trace\",\"params\":{\"txid\":\"${txid}\",\"vout\":${vout}}}" 2>&1)
+    output=$(echo "$try_trace_output" | jq -r '.result // empty' 2>/dev/null)
     if echo "$output" | jq empty >/dev/null 2>&1; then
       if [[ "$output" != "[]" && -n "$output" ]]; then
         if [ $trace_count -gt 0 ]; then
@@ -293,14 +364,16 @@ $(echo "$output" | jq)"
 
   # No traces found, generate a block and retry
   echo "No results from vout 0–9. Generating a block and retrying..." >&2
-  gen >&2
+  gen 1 "$network" >&2
 
   all_traces=""
   trace_count=0
 
   for vout in {0..12}; do
-    try_trace_output=$(oyl provider alkanes -method "trace" -params "{\"txid\": \"${txid}\", \"vout\": ${vout}}" -p "$network" 2>&1)
-    output=$(echo "$try_trace_output" | awk '/^\[/{flag=1} flag')
+    try_trace_output=$(curl -s -X POST "$ALKANES_RPC" \
+      -H "Content-Type: application/json" \
+      -d "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"trace\",\"params\":{\"txid\":\"${txid}\",\"vout\":${vout}}}" 2>&1)
+    output=$(echo "$try_trace_output" | jq -r '.result // empty' 2>/dev/null)
     if echo "$output" | jq empty >/dev/null 2>&1; then
       if [[ "$output" != "[]" && -n "$output" ]]; then
         if [ $trace_count -gt 0 ]; then
@@ -359,6 +432,7 @@ $(echo "$output" | jq)"
 vault-info() {
   local tx="$1"
   local network="${2:-oylnet}"
+  local mapped_network=$(map_network "$network")
 
   if [ -z "$tx" ]; then
     echo "Usage: vault-info <tx> [network]"
@@ -373,7 +447,12 @@ vault-info() {
   local contract="4:$tx"
 
   simulate() {
-    oyl alkane simulate -target "$contract" -inputs "$1" -p "$network" 2>/dev/null
+    "$ALKANES_CLI_BIN" -p "$mapped_network" \
+      --wallet-file "$ALKANES_WALLET" \
+      --passphrase "$ALKANES_PASS" \
+      --jsonrpc-url "$ALKANES_RPC" \
+      --data-api "$ALKANES_DATA" \
+      alkanes simulate "$contract" --calldata "[$1]:v0:v0" 2>/dev/null
   }
 
   get_le_u128() {
@@ -459,6 +538,7 @@ vault-info() {
 heal() {
   local token_id="$1"
   local network="${2:-oylnet}"
+  local mapped_network=$(map_network "$network")
 
   if [ -z "$token_id" ]; then
     echo "Usage: heal <token_id> [network]"
@@ -466,12 +546,19 @@ heal() {
   fi
 
   local result
-  result=$(oyl alkane execute -data "2,$token_id,3" -p "$network" 2>&1)
+  result=$("$ALKANES_CLI_BIN" -p "$mapped_network" \
+    --wallet-file "$ALKANES_WALLET" \
+    --passphrase "$ALKANES_PASS" \
+    --jsonrpc-url "$ALKANES_RPC" \
+    --data-api "$ALKANES_DATA" \
+    alkanes execute "[2,$token_id,3]:v0:v0" \
+    --from p2tr:0 \
+    -y 2>&1)
 
   # Check if result contains txId (success case)
   if echo "$result" | grep -q "txId"; then
     echo "$result"
-    gen
+    gen 1 "$network"
 
     # Extract txId for tracing
     local txid
@@ -491,6 +578,7 @@ heal() {
 candy() {
   local token_id="$1"
   local network="${2:-oylnet}"
+  local mapped_network=$(map_network "$network")
 
   if [ -z "$token_id" ]; then
     echo "Usage: candy <token_id> [network]"
@@ -498,12 +586,19 @@ candy() {
   fi
 
   local result
-  result=$(oyl alkane execute -data "2,$token_id,4" -p "$network" 2>&1)
+  result=$("$ALKANES_CLI_BIN" -p "$mapped_network" \
+    --wallet-file "$ALKANES_WALLET" \
+    --passphrase "$ALKANES_PASS" \
+    --jsonrpc-url "$ALKANES_RPC" \
+    --data-api "$ALKANES_DATA" \
+    alkanes execute "[2,$token_id,4]:v0:v0" \
+    --from p2tr:0 \
+    -y 2>&1)
 
   # Check if result contains txId (success case)
   if echo "$result" | grep -q "txId"; then
     echo "$result"
-    gen
+    gen 1 "$network"
 
     # Extract txId for tracing
     local txid
@@ -523,6 +618,7 @@ candy() {
 id() {
   local token_id="$1"
   local network="${2:-oylnet}"
+  local mapped_network=$(map_network "$network")
 
   if [ -z "$token_id" ]; then
     echo "Usage: id <token_id> [network]"
@@ -530,12 +626,18 @@ id() {
   fi
 
   # Run the command and extract just the le value
-  oyl alkane simulate -target "2:$token_id" -inputs "10" -p "$network" 2>/dev/null | jq -r '.parsed.le // empty'
+  "$ALKANES_CLI_BIN" -p "$mapped_network" \
+    --wallet-file "$ALKANES_WALLET" \
+    --passphrase "$ALKANES_PASS" \
+    --jsonrpc-url "$ALKANES_RPC" \
+    --data-api "$ALKANES_DATA" \
+    alkanes simulate "2:$token_id" --calldata "[10]:v0:v0" 2>/dev/null | jq -r '.parsed.le // empty'
 }
 
 level() {
   local token_id="$1"
   local network="${2:-oylnet}"
+  local mapped_network=$(map_network "$network")
 
   if [ -z "$token_id" ]; then
     echo "Usage: level <token_id> [network]"
@@ -543,12 +645,18 @@ level() {
   fi
 
   # Run the command and extract just the le value
-  oyl alkane simulate -target "2:$token_id" -inputs "11" -p "$network" 2>/dev/null | jq -r '.parsed.le // empty'
+  "$ALKANES_CLI_BIN" -p "$mapped_network" \
+    --wallet-file "$ALKANES_WALLET" \
+    --passphrase "$ALKANES_PASS" \
+    --jsonrpc-url "$ALKANES_RPC" \
+    --data-api "$ALKANES_DATA" \
+    alkanes simulate "2:$token_id" --calldata "[11]:v0:v0" 2>/dev/null | jq -r '.parsed.le // empty'
 }
 
 exp() {
   local token_id="$1"
   local network="${2:-oylnet}"
+  local mapped_network=$(map_network "$network")
 
   if [ -z "$token_id" ]; then
     echo "Usage: exp <token_id> [network]"
@@ -556,12 +664,18 @@ exp() {
   fi
 
   # Run the command and extract just the le value
-  oyl alkane simulate -target "2:$token_id" -inputs "12" -p "$network" 2>/dev/null | jq -r '.parsed.le // empty'
+  "$ALKANES_CLI_BIN" -p "$mapped_network" \
+    --wallet-file "$ALKANES_WALLET" \
+    --passphrase "$ALKANES_PASS" \
+    --jsonrpc-url "$ALKANES_RPC" \
+    --data-api "$ALKANES_DATA" \
+    alkanes simulate "2:$token_id" --calldata "[12]:v0:v0" 2>/dev/null | jq -r '.parsed.le // empty'
 }
 
 hp() {
   local token_id="$1"
   local network="${2:-oylnet}"
+  local mapped_network=$(map_network "$network")
 
   if [ -z "$token_id" ]; then
     echo "Usage: hp <token_id> [network]"
@@ -569,12 +683,18 @@ hp() {
   fi
 
   # Run the command and extract just the le value
-  oyl alkane simulate -target "2:$token_id" -inputs "13" -p "$network" 2>/dev/null | jq -r '.parsed.le // empty'
+  "$ALKANES_CLI_BIN" -p "$mapped_network" \
+    --wallet-file "$ALKANES_WALLET" \
+    --passphrase "$ALKANES_PASS" \
+    --jsonrpc-url "$ALKANES_RPC" \
+    --data-api "$ALKANES_DATA" \
+    alkanes simulate "2:$token_id" --calldata "[13]:v0:v0" 2>/dev/null | jq -r '.parsed.le // empty'
 }
 
 ivs() {
   local token_id="$1"
   local network="${2:-oylnet}"
+  local mapped_network=$(map_network "$network")
 
   if [ -z "$token_id" ]; then
     echo "Usage: ivs <token_id> [network]"
@@ -582,7 +702,12 @@ ivs() {
   fi
 
   local result
-  result=$(oyl alkane simulate -target "2:$token_id" -inputs "14" -p "$network" 2>/dev/null)
+  result=$("$ALKANES_CLI_BIN" -p "$mapped_network" \
+    --wallet-file "$ALKANES_WALLET" \
+    --passphrase "$ALKANES_PASS" \
+    --jsonrpc-url "$ALKANES_RPC" \
+    --data-api "$ALKANES_DATA" \
+    alkanes simulate "2:$token_id" --calldata "[14]:v0:v0" 2>/dev/null)
   local raw_data
   raw_data=$(echo "$result" | jq -r '.execution.data // .parsed.bytes // empty')
 
@@ -613,6 +738,7 @@ ivs() {
 evs() {
   local token_id="$1"
   local network="${2:-oylnet}"
+  local mapped_network=$(map_network "$network")
 
   if [ -z "$token_id" ]; then
     echo "Usage: evs <token_id> [network]"
@@ -620,7 +746,12 @@ evs() {
   fi
 
   local result
-  result=$(oyl alkane simulate -target "2:$token_id" -inputs "15" -p "$network" 2>/dev/null)
+  result=$("$ALKANES_CLI_BIN" -p "$mapped_network" \
+    --wallet-file "$ALKANES_WALLET" \
+    --passphrase "$ALKANES_PASS" \
+    --jsonrpc-url "$ALKANES_RPC" \
+    --data-api "$ALKANES_DATA" \
+    alkanes simulate "2:$token_id" --calldata "[15]:v0:v0" 2>/dev/null)
   local raw_data
   raw_data=$(echo "$result" | jq -r '.execution.data // .parsed.bytes // empty')
 
@@ -651,6 +782,7 @@ evs() {
 stats() {
   local token_id="$1"
   local network="${2:-oylnet}"
+  local mapped_network=$(map_network "$network")
 
   if [ -z "$token_id" ]; then
     echo "Usage: stats <token_id> [network]"
@@ -658,7 +790,12 @@ stats() {
   fi
 
   local result
-  result=$(oyl alkane simulate -target "2:$token_id" -inputs "16" -p "$network" 2>/dev/null)
+  result=$("$ALKANES_CLI_BIN" -p "$mapped_network" \
+    --wallet-file "$ALKANES_WALLET" \
+    --passphrase "$ALKANES_PASS" \
+    --jsonrpc-url "$ALKANES_RPC" \
+    --data-api "$ALKANES_DATA" \
+    alkanes simulate "2:$token_id" --calldata "[16]:v0:v0" 2>/dev/null)
   local raw_data
   raw_data=$(echo "$result" | jq -r '.execution.data // .parsed.bytes // empty')
 
@@ -689,6 +826,7 @@ stats() {
 moves() {
   local token_id="$1"
   local network="${2:-oylnet}"
+  local mapped_network=$(map_network "$network")
 
   if [ -z "$token_id" ]; then
     echo "Usage: moves <token_id> [network]"
@@ -696,7 +834,12 @@ moves() {
   fi
 
   local result
-  result=$(oyl alkane simulate -target "2:$token_id" -inputs "17" -p "$network" 2>/dev/null)
+  result=$("$ALKANES_CLI_BIN" -p "$mapped_network" \
+    --wallet-file "$ALKANES_WALLET" \
+    --passphrase "$ALKANES_PASS" \
+    --jsonrpc-url "$ALKANES_RPC" \
+    --data-api "$ALKANES_DATA" \
+    alkanes simulate "2:$token_id" --calldata "[17]:v0:v0" 2>/dev/null)
 
   # First try parsed.vec, then decode from hex if needed
   local moves_array
@@ -734,6 +877,7 @@ moves() {
 types() {
   local token_id="$1"
   local network="${2:-oylnet}"
+  local mapped_network=$(map_network "$network")
 
   if [ -z "$token_id" ]; then
     echo "Usage: types <token_id> [network]"
@@ -741,7 +885,12 @@ types() {
   fi
 
   local result
-  result=$(oyl alkane simulate -target "2:$token_id" -inputs "18" -p "$network" 2>/dev/null)
+  result=$("$ALKANES_CLI_BIN" -p "$mapped_network" \
+    --wallet-file "$ALKANES_WALLET" \
+    --passphrase "$ALKANES_PASS" \
+    --jsonrpc-url "$ALKANES_RPC" \
+    --data-api "$ALKANES_DATA" \
+    alkanes simulate "2:$token_id" --calldata "[18]:v0:v0" 2>/dev/null)
 
   # First try parsed.vec, then decode from hex if needed
   local types_array
@@ -779,6 +928,7 @@ types() {
 name() {
   local token_id="$1"
   local network="${2:-oylnet}"
+  local mapped_network=$(map_network "$network")
 
   if [ -z "$token_id" ]; then
     echo "Usage: name <token_id> [network]"
@@ -786,13 +936,19 @@ name() {
   fi
 
   local result
-  result=$(oyl alkane simulate -target "2:$token_id" -inputs "99" -p "$network" 2>/dev/null)
+  result=$("$ALKANES_CLI_BIN" -p "$mapped_network" \
+    --wallet-file "$ALKANES_WALLET" \
+    --passphrase "$ALKANES_PASS" \
+    --jsonrpc-url "$ALKANES_RPC" \
+    --data-api "$ALKANES_DATA" \
+    alkanes simulate "2:$token_id" --calldata "[99]:v0:v0" 2>/dev/null)
   echo "$result" | jq -r '.parsed.string // empty'
 }
 
 symbol() {
   local token_id="$1"
   local network="${2:-oylnet}"
+  local mapped_network=$(map_network "$network")
 
   if [ -z "$token_id" ]; then
     echo "Usage: symbol <token_id> [network]"
@@ -800,13 +956,19 @@ symbol() {
   fi
 
   local result
-  result=$(oyl alkane simulate -target "2:$token_id" -inputs "100" -p "$network" 2>/dev/null)
+  result=$("$ALKANES_CLI_BIN" -p "$mapped_network" \
+    --wallet-file "$ALKANES_WALLET" \
+    --passphrase "$ALKANES_PASS" \
+    --jsonrpc-url "$ALKANES_RPC" \
+    --data-api "$ALKANES_DATA" \
+    alkanes simulate "2:$token_id" --calldata "[100]:v0:v0" 2>/dev/null)
   echo "$result" | jq -r '.parsed.string // empty'
 }
 
 data() {
   local token_id="$1"
   local network="${2:-oylnet}"
+  local mapped_network=$(map_network "$network")
 
   if [ -z "$token_id" ]; then
     echo "Usage: data <token_id> [network]"
@@ -814,13 +976,19 @@ data() {
   fi
 
   local result
-  result=$(oyl alkane simulate -target "2:$token_id" -inputs "1000" -p "$network" 2>/dev/null)
+  result=$("$ALKANES_CLI_BIN" -p "$mapped_network" \
+    --wallet-file "$ALKANES_WALLET" \
+    --passphrase "$ALKANES_PASS" \
+    --jsonrpc-url "$ALKANES_RPC" \
+    --data-api "$ALKANES_DATA" \
+    alkanes simulate "2:$token_id" --calldata "[1000]:v0:v0" 2>/dev/null)
   echo "$result" | jq -r '.parsed.bytes // empty'
 }
 
 attr() {
   local token_id="$1"
   local network="${2:-oylnet}"
+  local mapped_network=$(map_network "$network")
 
   if [ -z "$token_id" ]; then
     echo "Usage: attr <token_id> [network]"
@@ -828,7 +996,12 @@ attr() {
   fi
 
   local result
-  result=$(oyl alkane simulate -target "2:$token_id" -inputs "1002" -p "$network" 2>/dev/null)
+  result=$("$ALKANES_CLI_BIN" -p "$mapped_network" \
+    --wallet-file "$ALKANES_WALLET" \
+    --passphrase "$ALKANES_PASS" \
+    --jsonrpc-url "$ALKANES_RPC" \
+    --data-api "$ALKANES_DATA" \
+    alkanes simulate "2:$token_id" --calldata "[1002]:v0:v0" 2>/dev/null)
   echo "$result" | jq -r '.parsed.string // empty'
 }
 
@@ -836,6 +1009,7 @@ train() {
   local token_id="$1"
   local opponent_type="$2"
   local network="${3:-oylnet}"
+  local mapped_network=$(map_network "$network")
 
   if [ -z "$token_id" ] || [ -z "$opponent_type" ]; then
     echo "Usage: train <token_id> <opponent_type> [network]"
@@ -843,12 +1017,19 @@ train() {
   fi
 
   local result
-  result=$(oyl alkane execute -data "2,$token_id,21,$opponent_type" -p "$network" 2>&1)
+  result=$("$ALKANES_CLI_BIN" -p "$mapped_network" \
+    --wallet-file "$ALKANES_WALLET" \
+    --passphrase "$ALKANES_PASS" \
+    --jsonrpc-url "$ALKANES_RPC" \
+    --data-api "$ALKANES_DATA" \
+    alkanes execute "[2,$token_id,21,$opponent_type]:v0:v0" \
+    --from p2tr:0 \
+    -y 2>&1)
 
   # Check if result contains txId (success case)
   if echo "$result" | grep -q "txId"; then
     echo "$result"
-    gen
+    gen 1 "$network"
 
     # Extract txId for tracing
     local txid
@@ -870,12 +1051,14 @@ parse_training_trace() {
   local txid="$1"
   local network="${2:-oylnet}"
 
-  # Get raw trace data directly from oyl command
+  # Get raw trace data directly from RPC
   local trace_result
   for vout in {0..6}; do
     local try_trace_output
-    try_trace_output=$(oyl provider alkanes -method "trace" -params "{\"txid\": \"${txid}\", \"vout\": ${vout}}" -p "$network" 2>&1)
-    trace_result=$(echo "$try_trace_output" | awk '/^\[/{flag=1} flag')
+    try_trace_output=$(curl -s -X POST "$ALKANES_RPC" \
+      -H "Content-Type: application/json" \
+      -d "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"trace\",\"params\":{\"txid\":\"${txid}\",\"vout\":${vout}}}" 2>&1)
+    trace_result=$(echo "$try_trace_output" | jq -r '.result // empty' 2>/dev/null)
     if echo "$trace_result" | jq empty >/dev/null 2>&1; then
       if [[ "$trace_result" != "[]" && -n "$trace_result" ]]; then
         break
@@ -1012,6 +1195,7 @@ init() {
   local factory_id="$1"
   local alkamon_factory_id="$2"
   local network="${3:-oylnet}"
+  local mapped_network=$(map_network "$network")
 
   if [ -z "$factory_id" ] || [ -z "$alkamon_factory_id" ]; then
     echo "Usage: init <factory_id> <alkamon_factory_id> [network]"
@@ -1019,12 +1203,19 @@ init() {
   fi
 
   local result
-  result=$(oyl alkane execute -data "4,$factory_id,0,2,12253,2,12253,0,0,$alkamon_factory_id" -p "$network" 2>&1)
+  result=$("$ALKANES_CLI_BIN" -p "$mapped_network" \
+    --wallet-file "$ALKANES_WALLET" \
+    --passphrase "$ALKANES_PASS" \
+    --jsonrpc-url "$ALKANES_RPC" \
+    --data-api "$ALKANES_DATA" \
+    alkanes execute "[4,$factory_id,0,2,12253,2,12253,0,0,$alkamon_factory_id]:v0:v0" \
+    --from p2tr:0 \
+    -y 2>&1)
 
   # Check if result contains txId (success case)
   if echo "$result" | grep -q "txId"; then
     echo "$result"
-    gen
+    gen 1 "$network"
 
     # Extract txId for tracing
     local txid
@@ -1046,6 +1237,7 @@ init() {
 summon() {
   local summon_type="$1"
   local network="${2:-oylnet}"
+  local mapped_network=$(map_network "$network")
 
   if [ -z "$summon_type" ]; then
     echo "Usage: summon <type> [network]"
@@ -1053,12 +1245,19 @@ summon() {
   fi
 
   local result
-  result=$(oyl alkane execute -data "4,$summon_type,1" -p "$network" 2>&1)
+  result=$("$ALKANES_CLI_BIN" -p "$mapped_network" \
+    --wallet-file "$ALKANES_WALLET" \
+    --passphrase "$ALKANES_PASS" \
+    --jsonrpc-url "$ALKANES_RPC" \
+    --data-api "$ALKANES_DATA" \
+    alkanes execute "[4,$summon_type,1]:v0:v0" \
+    --from p2tr:0 \
+    -y 2>&1)
 
   # Check if result contains txId (success case)
   if echo "$result" | grep -q "txId"; then
     echo "$result"
-    gen
+    gen 1 "$network"
 
     # Extract txId for tracing
     local txid
@@ -1072,8 +1271,10 @@ summon() {
       local trace_output
       for vout in {0..6}; do
         local try_trace_output
-        try_trace_output=$(oyl provider alkanes -method "trace" -params "{\"txid\": \"${txid}\", \"vout\": ${vout}}" -p "$network" 2>&1)
-        trace_output=$(echo "$try_trace_output" | awk '/^\[/{flag=1} flag')
+        try_trace_output=$(curl -s -X POST "$ALKANES_RPC" \
+          -H "Content-Type: application/json" \
+          -d "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"trace\",\"params\":{\"txid\":\"${txid}\",\"vout\":${vout}}}" 2>&1)
+        trace_output=$(echo "$try_trace_output" | jq -r '.result // empty' 2>/dev/null)
         if echo "$trace_output" | jq empty >/dev/null 2>&1; then
           if [[ "$trace_output" != "[]" && -n "$trace_output" ]]; then
             break
@@ -1133,6 +1334,7 @@ simulate() {
   local alkamon_id="$1"
   local opponent_level="$2"
   local network="${3:-oylnet}"
+  local mapped_network=$(map_network "$network")
 
   if [ -z "$alkamon_id" ] || [ -z "$opponent_level" ]; then
     echo "Usage: simulate <alkamon_id> <opponent_level> [network]"
@@ -1140,7 +1342,12 @@ simulate() {
   fi
 
   # Run the simulation and parse with jq
-  oyl alkane simulate -target "2:$alkamon_id" -inputs "21,$opponent_level" -p "$network" | jq -r '
+  "$ALKANES_CLI_BIN" -p "$mapped_network" \
+    --wallet-file "$ALKANES_WALLET" \
+    --passphrase "$ALKANES_PASS" \
+    --jsonrpc-url "$ALKANES_RPC" \
+    --data-api "$ALKANES_DATA" \
+    alkanes simulate "2:$alkamon_id" --calldata "[21,$opponent_level]:v0:v0" | jq -r '
   # Get gas used and battle data
   . as $root |
   
@@ -1352,6 +1559,7 @@ p2p() {
   local player1_id="$2"
   local player2_id="$3"
   local network="${4:-oylnet}"
+  local mapped_network=$(map_network "$network")
 
   if [ -z "$contract_id" ] || [ -z "$player1_id" ] || [ -z "$player2_id" ]; then
     echo "Usage: p2p <contract_id> <player1_token_id> <player2_token_id> [network]"
@@ -1367,11 +1575,18 @@ p2p() {
 
   # Execute the battle transaction
   local result
-  result=$(oyl alkane execute -data "4,$contract_id,$player1_id,$player2_id,1,2,2" -p "$network" 2>&1)
+  result=$("$ALKANES_CLI_BIN" -p "$mapped_network" \
+    --wallet-file "$ALKANES_WALLET" \
+    --passphrase "$ALKANES_PASS" \
+    --jsonrpc-url "$ALKANES_RPC" \
+    --data-api "$ALKANES_DATA" \
+    alkanes execute "[4,$contract_id,$player1_id,$player2_id,1,2,2]:v0:v0" \
+    --from p2tr:0 \
+    -y 2>&1)
 
   if echo "$result" | grep -q "txId"; then
     echo "$result"
-    gen
+    gen 1 "$network"
 
     # Extract txId for tracing
     local txid
@@ -1398,8 +1613,10 @@ parse_p2p_trace() {
   local trace_result
   for vout in {0..6}; do
     local try_trace_output
-    try_trace_output=$(oyl provider alkanes -method "trace" -params "{\"txid\": \"${txid}\", \"vout\": ${vout}}" -p "$network" 2>&1)
-    trace_result=$(echo "$try_trace_output" | awk '/^\[/{flag=1} flag')
+    try_trace_output=$(curl -s -X POST "$ALKANES_RPC" \
+      -H "Content-Type: application/json" \
+      -d "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"trace\",\"params\":{\"txid\":\"${txid}\",\"vout\":${vout}}}" 2>&1)
+    trace_result=$(echo "$try_trace_output" | jq -r '.result // empty' 2>/dev/null)
     if echo "$trace_result" | jq empty >/dev/null 2>&1; then
       if [[ "$trace_result" != "[]" && -n "$trace_result" ]]; then
         break
@@ -1605,7 +1822,16 @@ execute() {
 
   # Execute the command
   local result
-  result=$(oyl alkane execute -data "$data" -p "$network" --feeRate "$fee_rate" 2>&1)
+  local mapped_network=$(map_network "$network")
+  result=$("$ALKANES_CLI_BIN" -p "$mapped_network" \
+    --wallet-file "$ALKANES_WALLET" \
+    --passphrase "$ALKANES_PASS" \
+    --jsonrpc-url "$ALKANES_RPC" \
+    --data-api "$ALKANES_DATA" \
+    alkanes execute "[$data]:v0:v0" \
+    --from p2tr:0 \
+    --fee-rate "$fee_rate" \
+    -y 2>&1)
 
   # Check if result contains txId (success case)
   if echo "$result" | grep -q "txId"; then
@@ -1613,7 +1839,7 @@ execute() {
     echo ""
     echo "✅ Transaction submitted successfully!"
     echo "Generating block..."
-    gen
+    gen 1 "$network"
 
     # Extract txId for optional tracing
     local txid
