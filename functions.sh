@@ -288,6 +288,7 @@ new-vault-trace() {
 trace() {
   local txid="$1"
   local network="${2:-oylnet}"
+  local mapped_network=$(map_network "$network")
 
   if [ -z "$txid" ]; then
     echo "Error: txid is required"
@@ -300,56 +301,37 @@ trace() {
     return 1
   fi
 
-  local try_trace_output
-  local output
   local all_traces=""
   local trace_count=0
 
-  # Try outputs 0-9
+  # Try outputs 0-9 using alkanes-cli
   for vout in {0..9}; do
-    try_trace_output=$(curl -s -X POST "$ALKANES_RPC" \
-      -H "Content-Type: application/json" \
-      -d "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"trace\",\"params\":{\"txid\":\"${txid}\",\"vout\":${vout}}}" 2>&1)
-    output=$(echo "$try_trace_output" | jq -r '.result // empty' 2>/dev/null)
-    if echo "$output" | jq empty >/dev/null 2>&1; then
-      if [[ "$output" != "[]" && -n "$output" ]]; then
-        if [ $trace_count -gt 0 ]; then
-          # Multiple traces - add separator
-          all_traces="${all_traces}
+    local trace_output
+    trace_output=$("$ALKANES_CLI_BIN" -p "$mapped_network" \
+      --wallet-file "$ALKANES_WALLET" \
+      --passphrase "$ALKANES_PASS" \
+      --jsonrpc-url "$ALKANES_RPC" \
+      --data-api "$ALKANES_DATA" \
+      alkanes trace "${txid}:${vout}" 2>/dev/null)
+
+    # Check if we got a meaningful trace (not just "receive_intent" or "No trace data")
+    if echo "$trace_output" | grep -q "total_events" && \
+       ! echo "$trace_output" | grep -q "No trace data found" && \
+       ! (echo "$trace_output" | grep -q "total_events: 1" && \
+          echo "$trace_output" | grep -q "receive_intent" && \
+          ! echo "$trace_output" | grep -qE "execute_function|create|return"); then
+
+      if [ $trace_count -gt 0 ]; then
+        # Multiple traces - add separator
+        all_traces="${all_traces}
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 📍 Output #$vout:
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 "
-        fi
-
-        # Check if it's a revert and enhance the output
-        local tx_status
-        tx_status=$(echo "$output" | jq -r '.[] | select(.event == "return").data.status // empty' 2>/dev/null)
-
-        if [ "$tx_status" = "revert" ]; then
-          all_traces="${all_traces}🚫 Transaction Reverted${trace_count:+ (vout: $vout)}
-
-"
-          # Decode the revert reason
-          local revert_data
-          revert_data=$(echo "$output" | jq -r '.[] | select(.event == "return").data.response.data // empty' 2>/dev/null)
-
-          if [ -n "$revert_data" ]; then
-            local decoded_error
-            decoded_error=$(decode "$revert_data")
-            all_traces="${all_traces}Error: $decoded_error
-
-"
-          fi
-
-          all_traces="${all_traces}Full trace:
-$(echo "$output" | jq)"
-        else
-          all_traces="${all_traces}$(echo "$output" | jq)"
-        fi
-
-        trace_count=$((trace_count + 1))
       fi
+
+      all_traces="${all_traces}${trace_output}"
+      trace_count=$((trace_count + 1))
     fi
   done
 
@@ -370,49 +352,32 @@ $(echo "$output" | jq)"
   trace_count=0
 
   for vout in {0..12}; do
-    try_trace_output=$(curl -s -X POST "$ALKANES_RPC" \
-      -H "Content-Type: application/json" \
-      -d "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"trace\",\"params\":{\"txid\":\"${txid}\",\"vout\":${vout}}}" 2>&1)
-    output=$(echo "$try_trace_output" | jq -r '.result // empty' 2>/dev/null)
-    if echo "$output" | jq empty >/dev/null 2>&1; then
-      if [[ "$output" != "[]" && -n "$output" ]]; then
-        if [ $trace_count -gt 0 ]; then
-          # Multiple traces - add separator
-          all_traces="${all_traces}
+    local trace_output
+    trace_output=$("$ALKANES_CLI_BIN" -p "$mapped_network" \
+      --wallet-file "$ALKANES_WALLET" \
+      --passphrase "$ALKANES_PASS" \
+      --jsonrpc-url "$ALKANES_RPC" \
+      --data-api "$ALKANES_DATA" \
+      alkanes trace "${txid}:${vout}" 2>/dev/null)
+
+    # Check if we got a meaningful trace (not just "receive_intent" or "No trace data")
+    if echo "$trace_output" | grep -q "total_events" && \
+       ! echo "$trace_output" | grep -q "No trace data found" && \
+       ! (echo "$trace_output" | grep -q "total_events: 1" && \
+          echo "$trace_output" | grep -q "receive_intent" && \
+          ! echo "$trace_output" | grep -qE "execute_function|create|return"); then
+
+      if [ $trace_count -gt 0 ]; then
+        # Multiple traces - add separator
+        all_traces="${all_traces}
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 📍 Output #$vout:
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 "
-        fi
-
-        # Check if it's a revert and enhance the output
-        local tx_status
-        tx_status=$(echo "$output" | jq -r '.[] | select(.event == "return").data.status // empty' 2>/dev/null)
-
-        if [ "$tx_status" = "revert" ]; then
-          all_traces="${all_traces}🚫 Transaction Reverted${trace_count:+ (vout: $vout)}
-
-"
-          # Decode the revert reason
-          local revert_data
-          revert_data=$(echo "$output" | jq -r '.[] | select(.event == "return").data.response.data // empty' 2>/dev/null)
-
-          if [ -n "$revert_data" ]; then
-            local decoded_error
-            decoded_error=$(decode "$revert_data")
-            all_traces="${all_traces}Error: $decoded_error
-
-"
-          fi
-
-          all_traces="${all_traces}Full trace:
-$(echo "$output" | jq)"
-        else
-          all_traces="${all_traces}$(echo "$output" | jq)"
-        fi
-
-        trace_count=$((trace_count + 1))
       fi
+
+      all_traces="${all_traces}${trace_output}"
+      trace_count=$((trace_count + 1))
     fi
   done
 
@@ -1050,19 +1015,20 @@ train() {
 parse_training_trace() {
   local txid="$1"
   local network="${2:-oylnet}"
+  local mapped_network=$(map_network "$network")
 
-  # Get raw trace data directly from RPC
+  # Get raw trace data using alkanes-cli
   local trace_result
   for vout in {0..6}; do
-    local try_trace_output
-    try_trace_output=$(curl -s -X POST "$ALKANES_RPC" \
-      -H "Content-Type: application/json" \
-      -d "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"trace\",\"params\":{\"txid\":\"${txid}\",\"vout\":${vout}}}" 2>&1)
-    trace_result=$(echo "$try_trace_output" | jq -r '.result // empty' 2>/dev/null)
-    if echo "$trace_result" | jq empty >/dev/null 2>&1; then
-      if [[ "$trace_result" != "[]" && -n "$trace_result" ]]; then
-        break
-      fi
+    trace_result=$("$ALKANES_CLI_BIN" -p "$mapped_network" \
+      --wallet-file "$ALKANES_WALLET" \
+      --passphrase "$ALKANES_PASS" \
+      --jsonrpc-url "$ALKANES_RPC" \
+      --data-api "$ALKANES_DATA" \
+      alkanes trace "${txid}:${vout}" --raw 2>/dev/null)
+
+    if [ -n "$trace_result" ] && [ "$trace_result" != "[]" ] && echo "$trace_result" | jq empty >/dev/null 2>&1; then
+      break
     fi
   done
 
@@ -1270,15 +1236,15 @@ summon() {
       # Get trace data and parse it
       local trace_output
       for vout in {0..6}; do
-        local try_trace_output
-        try_trace_output=$(curl -s -X POST "$ALKANES_RPC" \
-          -H "Content-Type: application/json" \
-          -d "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"trace\",\"params\":{\"txid\":\"${txid}\",\"vout\":${vout}}}" 2>&1)
-        trace_output=$(echo "$try_trace_output" | jq -r '.result // empty' 2>/dev/null)
-        if echo "$trace_output" | jq empty >/dev/null 2>&1; then
-          if [[ "$trace_output" != "[]" && -n "$trace_output" ]]; then
-            break
-          fi
+        trace_output=$("$ALKANES_CLI_BIN" -p "$mapped_network" \
+          --wallet-file "$ALKANES_WALLET" \
+          --passphrase "$ALKANES_PASS" \
+          --jsonrpc-url "$ALKANES_RPC" \
+          --data-api "$ALKANES_DATA" \
+          alkanes trace "${txid}:${vout}" --raw 2>/dev/null)
+
+        if [ -n "$trace_output" ] && [ "$trace_output" != "[]" ] && echo "$trace_output" | jq empty >/dev/null 2>&1; then
+          break
         fi
       done
 
@@ -1608,19 +1574,20 @@ p2p() {
 parse_p2p_trace() {
   local txid="$1"
   local network="${2:-oylnet}"
+  local mapped_network=$(map_network "$network")
 
-  # Get raw trace data
+  # Get raw trace data using alkanes-cli
   local trace_result
   for vout in {0..6}; do
-    local try_trace_output
-    try_trace_output=$(curl -s -X POST "$ALKANES_RPC" \
-      -H "Content-Type: application/json" \
-      -d "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"trace\",\"params\":{\"txid\":\"${txid}\",\"vout\":${vout}}}" 2>&1)
-    trace_result=$(echo "$try_trace_output" | jq -r '.result // empty' 2>/dev/null)
-    if echo "$trace_result" | jq empty >/dev/null 2>&1; then
-      if [[ "$trace_result" != "[]" && -n "$trace_result" ]]; then
-        break
-      fi
+    trace_result=$("$ALKANES_CLI_BIN" -p "$mapped_network" \
+      --wallet-file "$ALKANES_WALLET" \
+      --passphrase "$ALKANES_PASS" \
+      --jsonrpc-url "$ALKANES_RPC" \
+      --data-api "$ALKANES_DATA" \
+      alkanes trace "${txid}:${vout}" --raw 2>/dev/null)
+
+    if [ -n "$trace_result" ] && [ "$trace_result" != "[]" ] && echo "$trace_result" | jq empty >/dev/null 2>&1; then
+      break
     fi
   done
 
